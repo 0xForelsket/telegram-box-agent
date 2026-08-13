@@ -1,0 +1,60 @@
+# Copy this file to .dev.vars for local development. Never commit .dev.vars.
+
+# Telegram and application access.
+# The webhook rejects every request unless TELEGRAM_WEBHOOK_SECRET is set and
+# matches Telegram's webhook secret token.
+TELEGRAM_BOT_TOKEN=replace-me
+TELEGRAM_WEBHOOK_SECRET=replace-with-a-random-secret
+OWNER_USER_ID=replace-with-your-numeric-telegram-user-id
+
+# Authorization. Set at least one of these, or the bot denies every request.
+# Users are authorized anywhere; groups only inside the listed group.
+WHITELISTED_USERS=replace-with-comma-separated-numeric-telegram-user-ids
+WHITELISTED_GROUPS=
+
+# Upstash Redis REST
+UPSTASH_REDIS_REST_URL=https://replace-me.upstash.io
+UPSTASH_REDIS_REST_TOKEN=replace-me
+
+# At least one ordinary chat provider is required.
+OPENAI_API_KEY=
+GOOGLE_MODEL_KEY=
+GROQ_API_KEY=
+CLAUDE_API_KEY=
+AZURE_API_KEY=
+OPENAI_COMPATIBLE_KEY=
+
+# Optional search and media providers
+EXA_API_KEY=
+OPENAI_SEARCH_API_KEY=
+GITHUB_TOKEN=
+AUDIO_API_KEY=
+
+# Optional image generation
+CLOUDFLARE_API_TOKEN=
+CLOUDFLARE_ACCOUNT_ID=
+
+# Upstash Box execution plane
+UPSTASH_BOX_API_KEY=
+UPSTASH_BOX_BASE_URL=
+BOX_SNAPSHOT_ID=
+BOX_CALLBACK_URL=https://your-worker.example.com/box/callback
+BOX_CALLBACK_SECRET=replace-with-at-least-32-random-characters
+DEEPSEEK_API_KEY=
+ZAI_CODING_PLAN_API_KEY=
+
+# Required for persistent Box schedules. QStash signs the exact callback body
+# and URL so the static Box webhook headers cannot forge recurring results.
+QSTASH_CURRENT_SIGNING_KEY=
+QSTASH_NEXT_SIGNING_KEY=
+
+# Keep false until deployment, callback, snapshot, and R2 checks pass.
+BOX_AGENT_ENABLED=false
+# Secure public default. Enable only when every member of the bound group is trusted.
+BOX_ALLOW_GROUP_MEMBERS=false
+
+# Update these when provider pricing changes. Startup validation fails closed if
+# the configured worst-case DeepSeek cost can exceed the per-job ceiling.
+BOX_DEEPSEEK_INPUT_USD_PER_MTOKENS=0.14
+BOX_DEEPSEEK_CACHED_INPUT_USD_PER_MTOKENS=0.0028
+BOX_DEEPSEEK_OUTPUT_USD_PER_MTOKENS=0.28

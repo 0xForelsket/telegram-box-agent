@@ -1,0 +1,59 @@
+{
+  "name": "telegram-box-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A self-hosted Telegram assistant with a Cloudflare control plane and isolated Upstash Box execution runtime",
+  "license": "MIT",
+  "author": "Telegram Box Agent contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xForelsket/telegram-box-agent.git"
+  },
+  "homepage": "https://github.com/0xForelsket/telegram-box-agent#readme",
+  "bugs": {
+    "url": "https://github.com/0xForelsket/telegram-box-agent/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "telegram",
+    "cloudflare-workers",
+    "upstash-box",
+    "pi-agent",
+    "agent-runtime"
+  ],
+  "main": "dist/index.js",
+  "scripts": {
+    "sync:soul": "node scripts/generate-soul.mjs",
+    "build": "npm run sync:soul && npx wrangler deploy --dry-run --outdir=dist",
+    "build:box-proof": "npx esbuild scripts/verify-box-pi.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/verify-box-pi.mjs",
+    "dev": "wrangler dev",
+    "typecheck": "npm run sync:soul && tsc --noEmit",
+    "test": "vitest run",
+    "test:integration": "vitest run src/index.integration.test.ts",
+    "demo:build": "npx esbuild scripts/demo-local.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/demo-local.mjs",
+    "demo": "npm run demo:build && node dist/demo-local.mjs",
+    "security:scan-history": "node scripts/scan-git-history-secrets.mjs",
+    "check": "npm test && npm run typecheck && npm run build && npm run demo && npm run security:scan-history && npm audit --omit=dev",
+    "verify:box:deepseek": "npm run build:box-proof && node --env-file=.dev.vars dist/verify-box-pi.mjs deepseek",
+    "verify:box:glm": "npm run build:box-proof && node --env-file=.dev.vars dist/verify-box-pi.mjs glm",
+    "verify:box:approval": "npm run build:box-proof && node --env-file=.dev.vars dist/verify-box-pi.mjs approval",
+    "verify:box:schedule": "npx esbuild scripts/verify-box-schedule.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/verify-box-schedule.mjs && node --env-file=.dev.vars dist/verify-box-schedule.mjs",
+    "r2:create": "wrangler r2 bucket create telegram-box-agent-artifacts && wrangler r2 bucket create telegram-box-agent-artifacts-preview",
+    "r2:lifecycle": "wrangler r2 bucket lifecycle add telegram-box-agent-artifacts artifacts-expire-30d jobs/ --expire-days 30 --force && wrangler r2 bucket lifecycle add telegram-box-agent-artifacts-preview artifacts-expire-30d jobs/ --expire-days 30 --force",
+    "r2:verify": "wrangler r2 bucket lifecycle list telegram-box-agent-artifacts && wrangler r2 bucket lifecycle list telegram-box-agent-artifacts-preview",
+    "snapshot:build": "node --env-file=.dev.vars scripts/build-box-snapshot.mjs",
+    "snapshot:verify": "node --env-file=.dev.vars scripts/verify-box-snapshot.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260813.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.122.0"
+  },
+  "dependencies": {
+    "@upstash/box": "0.6.3",
+    "jose": "5.10.0"
+  }
+}
