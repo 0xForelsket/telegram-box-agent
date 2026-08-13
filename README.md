@@ -1,17 +1,22 @@
 # Telegram Box Agent
 
-Telegram Box Agent is a self-hosted Telegram assistant that keeps short chat
-requests on a serverless control plane and moves long-running tool work into an
-isolated on-demand sandbox:
+A Telegram webhook is a good place to authorize, route, and acknowledge work.
+It is a bad place to run a browser, install packages, compile documents, or keep
+an agent alive long enough to produce a multi-file deliverable.
+
+Telegram Box Agent is an opinionated split-runtime answer: keep the control
+plane serverless, and move only execution-heavy requests into an isolated,
+on-demand sandbox.
 
 - Cloudflare Workers handle chat, authorization, routing, Redis-backed state,
   reminders, digests, callbacks, and private artifact delivery.
 - Upstash Box runs long-lived agent work that needs shell commands, files,
   packages, browsers, code execution, or document generation.
 
-The result is an ordinary chat bot that can also acknowledge a job immediately,
-work asynchronously, and return a PDF, spreadsheet, archive, image, or other
-downloadable artifact without advancing an agent through cron ticks.
+The Worker acknowledges a durable job immediately; Box performs the long-lived
+work and returns results through authenticated callbacks. The user gets a normal
+Telegram conversation plus asynchronous PDFs, spreadsheets, archives, images,
+or other artifacts without a cron-driven agent loop.
 
 > Status: public preview. It is suitable for self-hosted experiments with
 > trusted users. Upstash Box is still a preview dependency, and the protected
@@ -19,15 +24,7 @@ downloadable artifact without advancing an agent through cron ticks.
 > external-write security boundary. Read [SECURITY.md](SECURITY.md) before
 > exposing Box execution to a group.
 
-## Why this exists
-
-Serverless chat handlers are excellent for short requests and poor fits for
-stateful work such as researching several sources, running a browser, compiling
-LaTeX, or producing a multi-file deliverable. Telegram Box Agent keeps the fast
-control path serverless and moves only execution-heavy requests into isolated
-on-demand sandboxes.
-
-## Try the control plane locally
+## Verify the control plane locally
 
 The provider-free demo exercises the real deterministic router, Redis record
 model, asynchronous job state machine, signed completion callback, delivery
@@ -67,19 +64,28 @@ flowchart LR
     W -->|"message, file, signed link"| T
 ```
 
-## Highlights
+## Architectural trade-offs
 
-- Deterministic hybrid routing, plus `/agent` and `/quick` overrides
-- Immediate asynchronous jobs with status and cancellation
-- Owner-managed persistent Box schedules
-- Pi-based shell, filesystem, package, browser, and code execution
-- DeepSeek as the general Box route and an owner-only GLM coding-plan route
-- Private R2 artifacts retained for 30 days with 24-hour signed links
-- Direct Telegram delivery for files within Telegram's document limit
-- Body-signed QStash schedule callbacks plus nonce-bound, idempotent job callbacks
-- Per-user quotas, group concurrency control, cost gates, and response limits
-- Telegram approval/resume for recognized protected shell actions
-- A provider-free local demo of the complete control-plane lifecycle
+| Decision                                       | What it buys                                                                                       | What it costs                                                                                |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Cloudflare Worker control plane                | Fast webhook handling, centralized authorization, durable job state, and private artifact delivery | Redis, R2, and callback state machines add operational surface area                          |
+| Fresh Box for each immediate job               | Filesystem, shell, browser, packages, and a longer execution lifetime outside the request handler  | Snapshot maintenance and sandbox startup overhead; Upstash Box is still a preview dependency |
+| Deterministic pre-routing                      | Predictable cost and no model turn spent deciding where work runs                                  | Heuristics can misroute; `/agent` and `/quick` are explicit escape hatches                   |
+| Signed callbacks and scoped artifact authority | The execution plane does not receive permanent storage credentials                                 | More lifecycle states, retries, leases, and cleanup paths to test                            |
+| Protected-action approval classifier           | A useful owner checkpoint for recognized shell writes                                              | Defense in depth only; it is not complete mediation or an audited security boundary          |
+
+The current `npm run build` dry run reports a 912.72 KiB Worker upload
+(190.42 KiB gzip). The provider-free demo covers the queue-to-callback lifecycle,
+but it is not a production latency benchmark; credentialed Telegram, Box, R2,
+and provider acceptance checks remain separate.
+
+## Capabilities
+
+- Deterministic hybrid routing with `/agent` and `/quick` overrides
+- Asynchronous jobs, cancellation, owner-managed schedules, and approval/resume
+- Shell, filesystem, package, browser, code, and document execution through Pi
+- Private R2 artifacts with scoped upload authority and expiring download links
+- Quotas, concurrency limits, cost gates, authenticated callbacks, and recovery tests
 
 ## Routing
 
@@ -189,6 +195,19 @@ npm audit --omit=dev
 Tests cover routing overrides, group authorization, quotas, concurrency races,
 callback forgery and ordering, retries, cancellation, approval resume, schedules,
 cost gates, artifact idempotency, and delivery recovery.
+
+The Telegram entry point is a small facade over responsibility-focused modules:
+
+- [`message_handling.ts`](src/api/telegram/message_handling.ts) — webhook updates, media, callbacks, and transport
+- [`authorization.ts`](src/api/telegram/authorization.ts) — private-chat, group, administrator, and owner gates
+- [`memory.ts`](src/api/telegram/memory.ts) — prompt state, durable memories, summaries, and chat settings
+- [`chat_execution.ts`](src/api/telegram/chat_execution.ts) — provider routing, tools, research, and response generation
+- [`scheduling.ts`](src/api/telegram/scheduling.ts) — reminders, digests, cancellable tasks, and agent wake-ups
+- [`box_orchestration.ts`](src/api/telegram/box_orchestration.ts) — Box jobs, schedules, callbacks, and artifacts
+
+The command registry follows the same pattern: [`commands.ts`](src/config/commands.ts) aggregates core,
+utility, Box, and personal command modules instead of defining every command in
+one file.
 
 `npm run demo` is deterministic integration proof for the local control plane.
 The Box snapshot, provider routes, Telegram delivery, R2 lifecycle, and deployed
