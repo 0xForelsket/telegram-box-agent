@@ -54,6 +54,6 @@
   },
   "dependencies": {
     "@upstash/box": "0.6.3",
-    "jose": "5.10.0"
+    "jose": "6.2.8"
   }
 }
