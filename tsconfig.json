@@ -4,11 +4,10 @@
     "module": "esnext",
     "lib": ["esnext"],
     "types": ["@cloudflare/workers-types"],
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
     "esModuleInterop": true,
-    "baseUrl": "./src",
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
