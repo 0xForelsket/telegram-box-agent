@@ -1,4 +1,5 @@
 import { readSSEJson } from '../search/sse';
+import { globalFetch } from '../utils/helpers';
 import { ChatCompletionResponse, ToolCall } from './chat_types';
 
 interface ChatStreamChunk {
@@ -29,7 +30,7 @@ export async function streamOpenAIChatCompletion(
   onTextDelta: (delta: string) => Promise<void>,
   options: { fetchImpl?: typeof fetch } = {},
 ): Promise<ChatCompletionResponse> {
-  const doFetch = options.fetchImpl ?? fetch;
+  const doFetch = options.fetchImpl ?? globalFetch;
   const response = await doFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },

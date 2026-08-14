@@ -9,6 +9,8 @@
  * within the Worker, and applies the same size ceiling to every provider.
  */
 
+import { globalFetch } from '../utils/helpers';
+
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 export interface InlineImage {
@@ -27,7 +29,7 @@ const DATA_URL = /^data:([^;,]*)(;base64)?,/i;
  */
 export async function inlineImage(
   imageUrl: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = globalFetch,
 ): Promise<InlineImage> {
   const existing = parseDataUrl(imageUrl);
   if (existing) return existing;

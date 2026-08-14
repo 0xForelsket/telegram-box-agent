@@ -1,4 +1,5 @@
 import { RedisClient } from '../utils/redis';
+import { sha256Hex } from '../utils/helpers';
 
 const SESSION_TTL_SECONDS = 15 * 60;
 const SESSION_PREFIX = 'dashboard_session:v1:';
@@ -43,8 +44,7 @@ export class DashboardAccess {
   }
 
   private async hash(value: string): Promise<string> {
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-    return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    return await sha256Hex(value);
   }
 
   private toBase64Url(bytes: Uint8Array): string {

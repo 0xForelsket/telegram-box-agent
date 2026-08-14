@@ -123,6 +123,17 @@ describe('TelegramBot model picker', () => {
 describe('TelegramBot callback handling', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
+  function trackedBot(overrides: Partial<Env> = {}) {
+    const pending: Promise<unknown>[] = [];
+    const ctx = {
+      waitUntil(promise: Promise<unknown>) { pending.push(promise); },
+    } as unknown as ExecutionContext;
+    return {
+      bot: new TelegramBot(createEnv(overrides), ctx),
+      flush: async () => { await Promise.all(pending); },
+    };
+  }
+
   beforeEach(() => {
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
@@ -258,9 +269,10 @@ describe('TelegramBot callback handling', () => {
   });
 
   it('does not allow unwhitelisted users to trigger inline model changes', async () => {
-    const bot = new TelegramBot(createEnv());
+    const { bot, flush } = trackedBot();
 
     await bot.handleUpdate(createCallbackUpdate(99, 'model_gemini-test'));
+    await flush();
 
     const redisCommands = fetchMock.mock.calls
       .filter(([input]) => input.toString() === 'https://redis.example')
@@ -272,9 +284,10 @@ describe('TelegramBot callback handling', () => {
   });
 
   it('acknowledges a callback it does not recognise without acting on it', async () => {
-    const bot = new TelegramBot(createEnv());
+    const { bot, flush } = trackedBot();
 
     await bot.handleUpdate(createCallbackUpdate(42, 'lang_es'));
+    await flush();
 
     const redisCommands = fetchMock.mock.calls
       .filter(([input]) => input.toString() === 'https://redis.example')
@@ -1116,10 +1129,21 @@ describe('TelegramBot supergroup migration', () => {
     };
   }
 
+  function migrationBot(overrides: Partial<Env>): TelegramBot {
+    const bot = new TelegramBot(createEnv(overrides));
+    const internals = bot as unknown as {
+      redis: { get(key: string): Promise<string | null> };
+      runBackground(label: string, fn: () => Promise<void>): void;
+    };
+    internals.redis = { get: async () => null };
+    internals.runBackground = () => undefined;
+    return bot;
+  }
+
   it('names the new chat id when a group migrates away', async () => {
     const errors: string[] = [];
     const spy = vi.spyOn(console, 'error').mockImplementation(message => { errors.push(String(message)); });
-    const bot = new TelegramBot(createEnv({ WHITELISTED_GROUPS: String(OLD_GROUP) }));
+    const bot = migrationBot({ WHITELISTED_GROUPS: String(OLD_GROUP) });
 
     await bot.handleUpdate(migrationUpdate(OLD_GROUP, { migrate_to_chat_id: NEW_SUPERGROUP }));
 
@@ -1130,7 +1154,7 @@ describe('TelegramBot supergroup migration', () => {
   it('flags traffic from a migrated supergroup that is not whitelisted', async () => {
     const errors: string[] = [];
     const spy = vi.spyOn(console, 'error').mockImplementation(message => { errors.push(String(message)); });
-    const bot = new TelegramBot(createEnv({ WHITELISTED_GROUPS: String(OLD_GROUP) }));
+    const bot = migrationBot({ WHITELISTED_GROUPS: String(OLD_GROUP) });
 
     await bot.handleUpdate(migrationUpdate(NEW_SUPERGROUP, { migrate_from_chat_id: OLD_GROUP }));
 
@@ -1141,11 +1165,67 @@ describe('TelegramBot supergroup migration', () => {
   it('stays quiet once the new supergroup is whitelisted', async () => {
     const errors: string[] = [];
     const spy = vi.spyOn(console, 'error').mockImplementation(message => { errors.push(String(message)); });
-    const bot = new TelegramBot(createEnv({ WHITELISTED_GROUPS: String(NEW_SUPERGROUP) }));
+    const bot = migrationBot({ WHITELISTED_GROUPS: String(NEW_SUPERGROUP) });
 
     await bot.handleUpdate(migrationUpdate(NEW_SUPERGROUP, { migrate_from_chat_id: OLD_GROUP }));
 
     expect(errors.some(line => line.includes('WHITELISTED_GROUPS'))).toBe(false);
     spy.mockRestore();
+  });
+});
+
+describe('TelegramBot command menu synchronization', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('retries only a failed scope and does not replay successful menu targets', async () => {
+    const values = new Map<string, string>();
+    const redis = {
+      getMany: vi.fn(async (keys: string[]) => keys.map(key => values.get(key) ?? null)),
+      set: vi.fn(async (key: string, value: string) => { values.set(key, value); }),
+    };
+    let rejectDefaultScope = true;
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.endsWith('/setChatMenuButton')) {
+        calls.push('menu_button');
+        return Response.json({ ok: true });
+      }
+      if (url.endsWith('/setMyCommands')) {
+        const body = JSON.parse(String(init?.body)) as { scope: { type: string } };
+        calls.push(body.scope.type);
+        if (body.scope.type === 'default' && rejectDefaultScope) {
+          return new Response('bot is no longer a member', { status: 400 });
+        }
+        return Response.json({ ok: true });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    const bot = new TelegramBot(createEnv({ MINIAPP_BASE_URL: 'https://worker.example' }));
+    const internals = bot as unknown as {
+      redis: typeof redis;
+      boxJobs: () => { getBoundChatId(): Promise<number | null> };
+    };
+    internals.redis = redis;
+    internals.boxJobs = () => ({ getBoundChatId: async () => null });
+
+    await expect(bot.syncCommands()).rejects.toThrow('default: 400');
+    expect(calls).toEqual([
+      'all_private_chats',
+      'all_group_chats',
+      'default',
+      'menu_button',
+    ]);
+
+    rejectDefaultScope = false;
+    await expect(bot.syncCommands()).resolves.toBeUndefined();
+    expect(calls).toEqual([
+      'all_private_chats',
+      'all_group_chats',
+      'default',
+      'menu_button',
+      'default',
+    ]);
   });
 });

@@ -1,5 +1,6 @@
 import type { Env } from '../../env';
 import type { RedisClient } from '../../utils/redis';
+import { bytesToHex, constantTimeEqual } from '../../utils/helpers';
 import { ARTIFACT_RETENTION_DAYS, ArtifactStore, type BoxArtifact } from './artifact_store';
 import { BoxJobStore } from './box_job_store';
 
@@ -179,7 +180,11 @@ export class ArtifactGateway {
   }
 
   async createDownloadUrl(artifact: BoxArtifact, baseUrl?: string, now = this.now()): Promise<string> {
-    const origin = new URL(baseUrl || this.env.BOX_CALLBACK_URL || 'https://invalid.local').origin;
+    const configuredUrl = baseUrl?.trim() || this.env.BOX_CALLBACK_URL?.trim();
+    if (!configuredUrl) {
+      throw new Error('Artifact download URL requires BOX_CALLBACK_URL or an explicit base URL.');
+    }
+    const origin = new URL(configuredUrl).origin;
     const expiresAt = now + DOWNLOAD_LINK_TTL_MS;
     const signature = await this.signDownload(artifact.id, expiresAt);
     return `${origin}/artifacts/${artifact.id}?expires=${expiresAt}&signature=${signature}`;
@@ -234,16 +239,14 @@ export class ArtifactGateway {
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(`artifact-download-v1\n${artifactId}\n${expiresAt}`));
-    return [...new Uint8Array(signature)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    return bytesToHex(signature);
   }
 
   private async verifyDownloadSignature(artifactId: string, expiresAt: number, supplied: string): Promise<boolean> {
     if (!/^[a-f0-9]{64}$/.test(supplied)) return false;
     let expected: string;
     try { expected = await this.signDownload(artifactId, expiresAt); } catch { return false; }
-    let mismatch = 0;
-    for (let index = 0; index < expected.length; index++) mismatch |= expected.charCodeAt(index) ^ supplied.charCodeAt(index);
-    return mismatch === 0;
+    return constantTimeEqual(expected, supplied);
   }
 }
 

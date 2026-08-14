@@ -162,11 +162,16 @@ interface AppConfig {
   boxDeepseekOutputUsdPerMTokens: number;
 }
 
+const CONFIG_CACHE = new WeakMap<Env, AppConfig>();
+
 const getEnvOrDefault = (env: Env, key: keyof Env, defaultValue: string): string => {
   return (env[key] as string) || defaultValue;
 };
 
 export const getConfig = (env: Env): AppConfig => {
+  const cached = CONFIG_CACHE.get(env);
+  if (cached) return cached;
+
   const hasOpenAI = !!env.OPENAI_API_KEY;
   const hasGoogle = !!env.GOOGLE_MODEL_KEY;
   const hasGroq = !!env.GROQ_API_KEY;
@@ -187,7 +192,7 @@ export const getConfig = (env: Env): AppConfig => {
     throw new Error('OWNER_USER_ID must be set when BOX_AGENT_ENABLED=true. Box execution, approvals, and schedules are owner-gated.');
   }
 
-  return {
+  const config: AppConfig = {
     openaiApiKey: env.OPENAI_API_KEY,
     openaiBaseUrl: getEnvOrDefault(env, 'OPENAI_BASE_URL', 'https://api.openai.com/v1'),
     openaiModels: env.OPENAI_MODELS ? env.OPENAI_MODELS.split(',').map(model => model.trim()) : [],
@@ -286,6 +291,8 @@ export const getConfig = (env: Env): AppConfig => {
     boxDeepseekCachedInputUsdPerMTokens: parsePositiveNumber(env.BOX_DEEPSEEK_CACHED_INPUT_USD_PER_MTOKENS, 0.0028),
     boxDeepseekOutputUsdPerMTokens: parsePositiveNumber(env.BOX_DEEPSEEK_OUTPUT_USD_PER_MTOKENS, 0.28),
   };
+  CONFIG_CACHE.set(env, config);
+  return config;
 };
 
 /**

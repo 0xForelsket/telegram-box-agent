@@ -1,7 +1,7 @@
 import { Env, getConfig } from '../env';
 import { ModelAPIInterface, ModelResponse, ModelUsage } from './model_api_interface';
 import { Message, MessageContent, MessageContentPart, ToolCall, ToolDefinition } from './chat_types';
-import { fetchJson } from '../utils/helpers';
+import { fetchJson, globalFetch } from '../utils/helpers';
 import { RUNTIME_BUDGETS } from '../config/runtime_budgets';
 import { readSSEJson } from '../search/sse';
 
@@ -278,7 +278,7 @@ export default class GeminiAPI implements ModelAPIInterface {
     body: Record<string, unknown>,
     onTextDelta: (delta: string) => Promise<void>,
   ): Promise<GeminiGenerateContentResponse> {
-    const response = await (this.fetchImpl ?? fetch)(url, {
+    const response = await (this.fetchImpl ?? globalFetch)(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

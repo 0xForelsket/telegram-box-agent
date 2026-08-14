@@ -86,6 +86,22 @@ describe('URLReader', () => {
     expect(result.text).not.toContain('Menu');
   });
 
+  it('combines a caller abort signal with its own request timeout', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('text', {
+      headers: { 'content-type': 'text/plain' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    await new URLReader().read('https://example.com/article', controller.signal);
+
+    const requestSignal = fetchMock.mock.calls[0][1].signal as AbortSignal;
+    expect(requestSignal).not.toBe(controller.signal);
+    expect(requestSignal.aborted).toBe(false);
+    controller.abort();
+    expect(requestSignal.aborted).toBe(true);
+  });
+
   it('rejects unsupported content types and oversized declared bodies', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('pdf', {
       headers: { 'content-type': 'application/pdf' },

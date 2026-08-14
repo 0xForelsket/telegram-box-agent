@@ -1,4 +1,5 @@
 import { Env, getConfig } from '../env';
+import { globalFetch } from './helpers';
 
 type AppConfig = ReturnType<typeof getConfig>;
 
@@ -50,7 +51,7 @@ export class RedisClient {
     this.config = getConfig(env);
     this.url = this.config.upstashRedisRestUrl;
     this.token = this.config.upstashRedisRestToken;
-    this.fetchImpl = dependencies.fetchImpl ?? fetch;
+    this.fetchImpl = dependencies.fetchImpl ?? globalFetch;
     this.sleep = dependencies.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   }
 

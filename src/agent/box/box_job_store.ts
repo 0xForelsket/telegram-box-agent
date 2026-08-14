@@ -1,5 +1,6 @@
 import type { WebhookPayload } from '@upstash/box';
 import type { RedisClient } from '../../utils/redis';
+import { constantTimeEqual, hashToken } from '../../utils/helpers';
 import type { BoxModelRoute } from './pi_runtime';
 import { parseApprovalMarker, type PendingBoxApproval } from './execution_policy';
 
@@ -560,18 +561,4 @@ function normalizeToken(value: string, label: string): string {
   const token = value.trim();
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(token)) throw new Error(`Invalid ${label}.`);
   return token;
-}
-
-async function hashToken(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function constantTimeEqual(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
-  let mismatch = 0;
-  for (let index = 0; index < left.length; index++) {
-    mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  }
-  return mismatch === 0;
 }

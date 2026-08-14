@@ -1,3 +1,5 @@
+import { sha256Hex } from '../../utils/helpers';
+
 /**
  * The allowlist of external writes a Box job may ask the Worker to perform.
  *
@@ -100,8 +102,7 @@ export async function hashAction(request: ActionRequest): Promise<string> {
     request.action,
     Object.keys(request.params).sort().map(key => [key, request.params[key]]),
   ]);
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
-  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return await sha256Hex(canonical);
 }
 
 export function describeAction(request: ActionRequest): string {

@@ -2,7 +2,7 @@ import { Env, getConfig } from '../env';
 import { ModelAPIInterface } from './model_api_interface';
 import { ChatCompletionResponse, Message } from './chat_types';
 import OpenAICompatibleAPI from './openai_compatible';
-import { fetchJson, getFirstChoiceContent } from '../utils/helpers';
+import { fetchJson, getFirstChoiceContent, globalFetch } from '../utils/helpers';
 import { inlineImage } from './image_payload';
 
 const MAX_ANALYSIS_TOKENS = 300;
@@ -123,7 +123,7 @@ class ImageAnalysisAPI implements ModelAPIInterface {
   }
 
   private async fetchImageAsBase64(imageUrl: string) {
-    return await inlineImage(imageUrl, this.fetchImpl ?? fetch);
+    return await inlineImage(imageUrl, this.fetchImpl ?? globalFetch);
   }
 
   async generateResponse(_messages: Message[], _model?: string): Promise<string> {

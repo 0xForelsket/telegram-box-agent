@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Env } from '../../env';
 import type { RedisClient } from '../../utils/redis';
 import { ArtifactGateway, MAX_ARTIFACT_BYTES } from './artifact_gateway';
-import { ArtifactStore } from './artifact_store';
+import { ArtifactStore, type BoxArtifact } from './artifact_store';
 import { BoxJobStore } from './box_job_store';
 
 class FakeRedis {
@@ -125,6 +125,18 @@ describe('ArtifactGateway', () => {
     expect((await harness.gateway.download(new Request(first), artifact.id)).status).toBe(401);
     const second = await harness.gateway.createDownloadUrl(current);
     expect(second).not.toBe(first);
+  });
+
+  it('fails clearly when no public download origin is configured', async () => {
+    const harness = await setup();
+    const gateway = new ArtifactGateway(
+      { ...harness.env, BOX_CALLBACK_URL: undefined },
+      harness.redis as unknown as RedisClient,
+      { store: harness.artifacts, jobs: harness.jobs },
+    );
+
+    await expect(gateway.createDownloadUrl({ id: 'ba_123456789abc' } as BoxArtifact))
+      .rejects.toThrow('requires BOX_CALLBACK_URL or an explicit base URL');
   });
 
   it('rejects forged sessions, invalid lengths, terminal jobs, and oversized artifacts', async () => {

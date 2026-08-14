@@ -29,6 +29,12 @@ function createEnv(overrides: Partial<Env> = {}): Env {
 }
 
 describe('getConfig', () => {
+  it('reuses parsed configuration for the same Worker Env binding', () => {
+    const env = createEnv({ WHITELISTED_USERS: '42, 77' });
+
+    expect(getConfig(env)).toBe(getConfig(env));
+  });
+
   it('defaults ambient memory off unless explicitly enabled', () => {
     expect(getConfig(createEnv()).ambientMemoryDefault).toBe(false);
     expect(getConfig(createEnv({ AMBIENT_MEMORY_DEFAULT: 'true' })).ambientMemoryDefault).toBe(true);

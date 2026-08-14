@@ -1,4 +1,5 @@
 import type { RedisClient } from '../../utils/redis';
+import { sha256Hex } from '../../utils/helpers';
 import type { BoxModelRoute } from './pi_runtime';
 
 const RECORD_PREFIX = 'box_schedule:v1:';
@@ -196,8 +197,7 @@ function parseRun(raw: string | null): BoxScheduleRunRecord | null {
 }
 
 async function hash(value: string): Promise<string> {
-  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return await sha256Hex(value);
 }
 
 function parse(raw: string | null): BoxScheduleRecord | null {

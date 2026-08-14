@@ -1,7 +1,7 @@
 import { Env, getConfig } from '../env';
 import { ModelAPIInterface, ModelResponse } from './model_api_interface';
 import { ChatCompletionResponse, Message, ToolChoice, ToolDefinition } from './chat_types';
-import { fetchJson, getFirstChoiceContent } from '../utils/helpers';
+import { fetchJson, getFirstChoiceContent, globalFetch } from '../utils/helpers';
 import { inlineImage } from './image_payload';
 import { streamOpenAIChatCompletion } from './openai_chat_stream';
 
@@ -157,7 +157,7 @@ class OpenAICompatibleAPI implements ModelAPIInterface {
     // Inlined rather than passed by reference: the configured base URL is an
     // arbitrary third party, and a URL it fetches for us is a URL it sees. A
     // Telegram file URL carries the bot token in its path.
-    const image = await inlineImage(imageUrl, this.fetchImpl ?? fetch);
+    const image = await inlineImage(imageUrl, this.fetchImpl ?? globalFetch);
     const data = await fetchJson<ChatCompletionResponse>(
       this.getEndpoint('/chat/completions'),
       {

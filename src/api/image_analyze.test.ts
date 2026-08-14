@@ -16,6 +16,9 @@ const IMAGE_URL = 'https://files.example/photo.jpg';
 function compatible(models: string[] = []) {
   return new OpenAICompatibleAPI(undefined, {
     config: { apiKey: 'k', baseUrl: 'https://compat.example', models },
+    fetchImpl: vi.fn(async () => Response.json({
+      data: models.map(id => ({ id })),
+    })) as unknown as typeof fetch,
   });
 }
 

@@ -14,7 +14,7 @@
  * The stale-menu fingerprint hashes command names and descriptions, so a change
  * to *which scope* a command lands in is invisible to it.
  */
-export const MENU_SCHEMA_VERSION = 4;
+export const MENU_SCHEMA_VERSION = 5;
 
 /** Refuse for anyone but `OWNER_USER_ID`. */
 export const OWNER_ONLY_COMMANDS = new Set(['box', 'action']);

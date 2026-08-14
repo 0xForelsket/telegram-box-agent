@@ -1,4 +1,14 @@
-import { Env } from '../env';
+import type { Env } from '../env';
+
+/**
+ * The global `fetch`, safe to store on an object.
+ *
+ * Workers throws `TypeError: Illegal invocation` when the global fetch is
+ * invoked with a `this` other than `globalThis`, which is exactly what happens
+ * once it is assigned to a field and later called as `this.fetchImpl(...)`.
+ * The wrapper keeps the call site plain while restoring the global receiver.
+ */
+export const globalFetch: typeof fetch = (input, init?) => fetch(input, init);
 
 /**
  * Matches a fenced block: a closed pair, or an unterminated fence running to
@@ -181,7 +191,7 @@ export class FetchTimeoutError extends Error {
   }
 }
 
-function withTimeoutSignal(callerSignal: AbortSignal | null | undefined, timeoutMs: number): AbortSignal {
+export function withTimeoutSignal(callerSignal: AbortSignal | null | undefined, timeoutMs: number): AbortSignal {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   return callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
 }
@@ -193,7 +203,7 @@ export async function fetchJson<T>(
   options: FetchJsonOptions = {},
 ): Promise<T> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
-  const doFetch = options.fetchImpl ?? fetch;
+  const doFetch = options.fetchImpl ?? globalFetch;
 
   let response: Response;
   try {
@@ -230,6 +240,38 @@ export function constantTimeEqual(left: string, right: string): boolean {
     mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
   }
   return mismatch === 0;
+}
+
+/** Canonical lower-case hex encoding for Web Crypto results. */
+export function bytesToHex(value: ArrayBuffer | Uint8Array): string {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+  return [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** SHA-256 for the string fingerprints and stored token digests used by the Worker. */
+export async function sha256Hex(value: string): Promise<string> {
+  return bytesToHex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
+}
+
+export interface HashTokenOptions {
+  label: string;
+  minLength: number;
+  maxLength?: number;
+}
+
+/** Hashes opaque tokens, optionally validating the shared URL-safe token form. */
+export async function hashToken(value: string, options?: HashTokenOptions): Promise<string> {
+  if (!options) return await sha256Hex(value);
+  const normalized = value.trim();
+  const maxLength = options.maxLength ?? 128;
+  if (
+    normalized.length < options.minLength ||
+    normalized.length > maxLength ||
+    !/^[a-zA-Z0-9_-]+$/.test(normalized)
+  ) {
+    throw new Error(`Invalid ${options.label}.`);
+  }
+  return await sha256Hex(normalized);
 }
 
 export function getFirstChoiceContent(

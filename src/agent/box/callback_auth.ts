@@ -1,3 +1,5 @@
+import { bytesToHex, constantTimeEqual } from '../../utils/helpers';
+
 const SIGNATURE_VERSION = 'v1';
 // Callback replay is prevented by the one-time nonce stored with the job. Keep
 // the signed request valid for the job-record lifetime so Worker policy does
@@ -88,16 +90,7 @@ async function sign(secret: string, payload: string): Promise<string> {
     ['sign'],
   );
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
-  return [...new Uint8Array(signature)].map(byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function constantTimeEqual(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
-  let mismatch = 0;
-  for (let index = 0; index < left.length; index++) {
-    mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  }
-  return mismatch === 0;
+  return bytesToHex(signature);
 }
 
 function requireSecret(value: string): string {

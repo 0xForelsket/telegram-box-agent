@@ -18,21 +18,22 @@ export interface PendingBoxApproval {
   requestedAt: number;
 }
 
+/** Shared by the Worker preview and the policy source injected into the Box. */
+export const PROTECTED_SHELL_ACTION_RULES: ReadonlyArray<
+  readonly [ProtectedActionCategory, RegExp]
+> = [
+  ['deployment', /\b(?:wrangler|vercel|netlify|fly(?:ctl)?|railway|render)\s+(?:deploy|publish|release)\b|\bkubectl\s+(?:apply|create|delete|patch|replace|set)\b|\bterraform\s+(?:apply|destroy|import)\b|\b(?:aws|gcloud|az)\b[^\n;&|]*\b(?:deploy|create|delete|update|put|publish|release)\b|\bdocker\s+(?:push|buildx\s+build[^\n;&|]*--push)\b|\bgh\s+release\s+create\b/i],
+  ['spending', /\b(?:stripe|paypal)\b[^\n;&|]*\b(?:charge|payment|invoice|checkout|refund|transfer|payout|create)\b|\b(?:buy|purchase|place\s+order|top\s*up)\b/i],
+  ['protected_push', /\bgit\s+push\b/i],
+  ['external_destructive', /\b(?:curl|http|wget)\b[^\n;&|]*(?:-X|--request)\s*(?:POST|PUT|PATCH|DELETE)\b|\bgh\s+api\b[^\n;&|]*(?:-X|--method)\s*(?:POST|PUT|PATCH|DELETE)\b|\b(?:aws\s+s3\s+rm|aws\s+s3api\s+delete|rclone\s+(?:delete|purge)|kubectl\s+delete)\b/i],
+  ['third_party_communication', /\b(?:sendmail|mailx?|mutt)\b|\b(?:slack|discord|teams)\b[^\n;&|]*(?:send|post|message|webhook)|\bgh\s+(?:issue|pr)\s+(?:comment|create|close|merge)|\bcurl\b[^\n;&|]*(?:hooks\.slack\.com|discord(?:app)?\.com\/api\/webhooks|api\.telegram\.org)[^\n;&|]*(?:-d|--data|--form)/i],
+];
+
 export function classifyProtectedShellAction(command: string): ProtectedActionCategory | null {
   const value = command.trim();
   if (!value) return null;
-  if (/\b(?:wrangler|vercel|netlify|fly(?:ctl)?|railway|render)\s+(?:deploy|publish|release)\b|\bkubectl\s+(?:apply|create|delete|patch|replace|set)\b|\bterraform\s+(?:apply|destroy|import)\b|\b(?:aws|gcloud|az)\b[^\n;&|]*\b(?:deploy|create|delete|update|put|publish|release)\b|\bdocker\s+(?:push|buildx\s+build[^\n;&|]*--push)\b|\bgh\s+release\s+create\b/i.test(value)) {
-    return 'deployment';
-  }
-  if (/\b(?:stripe|paypal)\b[^\n;&|]*\b(?:charge|payment|invoice|checkout|refund|transfer|payout|create)\b|\b(?:buy|purchase|place\s+order|top\s*up)\b/i.test(value)) {
-    return 'spending';
-  }
-  if (/\bgit\s+push\b/i.test(value)) return 'protected_push';
-  if (/\b(?:curl|http|wget)\b[^\n;&|]*(?:-X|--request)\s*(?:POST|PUT|PATCH|DELETE)\b|\bgh\s+api\b[^\n;&|]*(?:-X|--method)\s*(?:POST|PUT|PATCH|DELETE)\b|\b(?:aws\s+s3\s+rm|aws\s+s3api\s+delete|rclone\s+(?:delete|purge)|kubectl\s+delete)\b/i.test(value)) {
-    return 'external_destructive';
-  }
-  if (/\b(?:sendmail|mailx?|mutt)\b|\b(?:slack|discord|teams)\b[^\n;&|]*(?:send|post|message|webhook)|\bgh\s+(?:issue|pr)\s+(?:comment|create|close|merge)|\bcurl\b[^\n;&|]*(?:hooks\.slack\.com|discord(?:app)?\.com\/api\/webhooks|api\.telegram\.org)[^\n;&|]*(?:-d|--data|--form)/i.test(value)) {
-    return 'third_party_communication';
+  for (const [category, pattern] of PROTECTED_SHELL_ACTION_RULES) {
+    if (pattern.test(value)) return category;
   }
   return null;
 }
@@ -72,13 +73,14 @@ const pendingPath = process.env.BOX_PENDING_APPROVAL_PATH || "/workspace/home/.b
 const grantPath = process.env.BOX_APPROVAL_GRANT_PATH || "/workspace/home/.box-approval-grant.json";
 const noncePath = process.env.BOX_APPROVAL_NONCE_PATH || "/workspace/home/.box-approval-nonce";
 const consumedApprovals = new Set();
+const protectedActionRules = [
+${PROTECTED_SHELL_ACTION_RULES.map(([category, pattern]) => `  [${pattern.toString()}, ${JSON.stringify(category)}]`).join(',\n')}
+];
 
 function classify(command) {
-  if (/\b(?:wrangler|vercel|netlify|fly(?:ctl)?|railway|render)\s+(?:deploy|publish|release)\b|\bkubectl\s+(?:apply|create|delete|patch|replace|set)\b|\bterraform\s+(?:apply|destroy|import)\b|\b(?:aws|gcloud|az)\b[^\n;&|]*\b(?:deploy|create|delete|update|put|publish|release)\b|\bdocker\s+(?:push|buildx\s+build[^\n;&|]*--push)\b|\bgh\s+release\s+create\b/i.test(command)) return "deployment";
-  if (/\b(?:stripe|paypal)\b[^\n;&|]*\b(?:charge|payment|invoice|checkout|refund|transfer|payout|create)\b|\b(?:buy|purchase|place\s+order|top\s*up)\b/i.test(command)) return "spending";
-  if (/\bgit\s+push\b/i.test(command)) return "protected_push";
-  if (/\b(?:curl|http|wget)\b[^\n;&|]*(?:-X|--request)\s*(?:POST|PUT|PATCH|DELETE)\b|\bgh\s+api\b[^\n;&|]*(?:-X|--method)\s*(?:POST|PUT|PATCH|DELETE)\b|\b(?:aws\s+s3\s+rm|aws\s+s3api\s+delete|rclone\s+(?:delete|purge)|kubectl\s+delete)\b/i.test(command)) return "external_destructive";
-  if (/\b(?:sendmail|mailx?|mutt)\b|\b(?:slack|discord|teams)\b[^\n;&|]*(?:send|post|message|webhook)|\bgh\s+(?:issue|pr)\s+(?:comment|create|close|merge)|\bcurl\b[^\n;&|]*(?:hooks\.slack\.com|discord(?:app)?\.com\/api\/webhooks|api\.telegram\.org)[^\n;&|]*(?:-d|--data|--form)/i.test(command)) return "third_party_communication";
+  for (const [pattern, category] of protectedActionRules) {
+    if (pattern.test(command)) return category;
+  }
   return null;
 }
 

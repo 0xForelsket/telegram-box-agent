@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { classifyProtectedShellAction, parseApprovalMarker, PI_EXECUTION_POLICY_EXTENSION_SOURCE } from './execution_policy';
+import {
+  classifyProtectedShellAction,
+  parseApprovalMarker,
+  PI_EXECUTION_POLICY_EXTENSION_SOURCE,
+  PROTECTED_SHELL_ACTION_RULES,
+} from './execution_policy';
 
 describe('Box protected-action policy', () => {
   it('allows sandbox-local work without approval', () => {
@@ -29,6 +34,13 @@ describe('Box protected-action policy', () => {
     expect(PI_EXECUTION_POLICY_EXTENSION_SOURCE).toContain('BOX_APPROVED_ACTION_ALREADY_EXECUTED');
     expect(PI_EXECUTION_POLICY_EXTENSION_SOURCE).toContain('Permanent external-integration credentials are never provided.');
     expect(PI_EXECUTION_POLICY_EXTENSION_SOURCE).not.toContain('BOX_EXTERNAL_WRITE_ALLOWLIST');
+  });
+
+  it('generates every injected classifier rule from the Worker definition', () => {
+    for (const [category, pattern] of PROTECTED_SHELL_ACTION_RULES) {
+      expect(PI_EXECUTION_POLICY_EXTENSION_SOURCE).toContain(pattern.toString());
+      expect(PI_EXECUTION_POLICY_EXTENSION_SOURCE).toContain(JSON.stringify(category));
+    }
   });
 });
 

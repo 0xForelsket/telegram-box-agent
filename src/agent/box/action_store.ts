@@ -1,4 +1,5 @@
 import type { RedisClient } from '../../utils/redis';
+import { constantTimeEqual, hashToken } from '../../utils/helpers';
 import type { ActionName } from './action_catalog';
 
 const RECORD_PREFIX = 'box_action:v1:';
@@ -59,7 +60,10 @@ export class ActionStore {
       status: 'pending',
       // Only the hash is stored. A Redis dump must not be enough to approve an
       // action, the same reason callback nonces are stored hashed.
-      approvalNonceHash: await hashToken(input.approvalNonce),
+      approvalNonceHash: await hashToken(input.approvalNonce, {
+        label: 'action approval nonce',
+        minLength: 8,
+      }),
       createdAt: now,
       expiresAt: now + ACTION_APPROVAL_TTL_MS,
     };
@@ -105,7 +109,10 @@ export class ActionStore {
     now?: number;
   }): Promise<BrokeredAction> {
     const now = input.now ?? Date.now();
-    const suppliedHash = await hashToken(input.nonce);
+    const suppliedHash = await hashToken(input.nonce, {
+      label: 'action approval nonce',
+      minLength: 8,
+    });
     return await this.redis.withLock(`box-action:${input.id}`, async () => {
       const record = await this.require(input.id);
       if (record.status !== 'pending') {
@@ -186,18 +193,4 @@ export class ActionStore {
     if (!/^bx_[a-f0-9]{12}$/.test(normalized)) throw new Error('Invalid action ID.');
     return `${RECORD_PREFIX}${normalized}`;
   }
-}
-
-async function hashToken(value: string): Promise<string> {
-  const normalized = value.trim();
-  if (!/^[a-zA-Z0-9_-]{8,128}$/.test(normalized)) throw new Error('Invalid action approval nonce.');
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
-  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function constantTimeEqual(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
-  let mismatch = 0;
-  for (let index = 0; index < left.length; index++) mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  return mismatch === 0;
 }

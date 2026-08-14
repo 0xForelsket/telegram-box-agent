@@ -23,6 +23,7 @@ import { MODEL_CALLBACK_PREFIX } from "../../config/callback_data";
 import {
   buildMenuScopePlans,
   MENU_SCHEMA_VERSION,
+  type MenuScopePlan,
 } from "../../config/menu_scope";
 import { RETIRED_COMMAND_HINTS } from "../../config/commands/subcommand";
 import { isUserFacingError } from "../../utils/user_facing_error";
@@ -1025,10 +1026,27 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
   protected getCommandSchemaFingerprint(): string {
     const schema = [
       `menu-v${MENU_SCHEMA_VERSION}`,
+      `miniapp:${this.config.miniAppBaseUrl ?? "disabled"}`,
       ...this.commands
         .map((command) => `${command.name}:${command.description}`)
         .sort(),
     ].join("|");
+    return this.getMenuFingerprint(schema);
+  }
+
+  private getMenuScopeKey(plan: MenuScopePlan): string {
+    return `telegram_commands:v1:scope:${this.getMenuFingerprint(JSON.stringify(plan.scope))}`;
+  }
+
+  private getMenuScopeFingerprint(plan: MenuScopePlan): string {
+    return this.getMenuFingerprint(JSON.stringify([
+      MENU_SCHEMA_VERSION,
+      plan.scope,
+      plan.commands,
+    ]));
+  }
+
+  private getMenuFingerprint(schema: string): string {
     let hash = 2166136261;
     for (let index = 0; index < schema.length; index += 1) {
       hash ^= schema.charCodeAt(index);
@@ -1214,26 +1232,62 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
         .catch(() => null),
     });
 
-    for (const plan of plans) {
-      const response = await fetch(`${this.apiUrl}/setMyCommands`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          scope: plan.scope,
-          commands: plan.commands.map((command) => ({
-            command: command.name,
-            description: command.description,
-          })),
-        }),
-      });
-      if (!response.ok) {
-        throw new Error(
-          `Failed to set the Telegram command menu for scope ${plan.scope.type}: ${response.statusText}`,
-        );
+    const scopeKeys = plans.map(plan => this.getMenuScopeKey(plan));
+    const menuButtonKey = "telegram_commands:v1:menu_button";
+    const menuButtonFingerprint = this.getMenuFingerprint(
+      `${MENU_SCHEMA_VERSION}:${this.config.miniAppBaseUrl ?? "disabled"}`,
+    );
+    const storedFingerprints = await this.redis.getMany([
+      ...scopeKeys,
+      ...(this.config.miniAppBaseUrl ? [menuButtonKey] : []),
+    ]);
+
+    // Persist each successful target immediately. If one Telegram scope is
+    // permanently rejected, later updates retry that scope alone instead of
+    // replaying every command menu and the already-correct Mini App button.
+    const failures: string[] = [];
+    for (let index = 0; index < plans.length; index += 1) {
+      const plan = plans[index];
+      const fingerprint = this.getMenuScopeFingerprint(plan);
+      if (storedFingerprints[index] === fingerprint) continue;
+      try {
+        const response = await fetch(`${this.apiUrl}/setMyCommands`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scope: plan.scope,
+            commands: plan.commands.map((command) => ({
+              command: command.name,
+              description: command.description,
+            })),
+          }),
+        });
+        if (!response.ok) {
+          failures.push(
+            `${plan.scope.type}: ${response.status} ${await response.text()}`,
+          );
+        } else {
+          await this.redis.set(scopeKeys[index], fingerprint);
+        }
+      } catch (error) {
+        failures.push(`${plan.scope.type}: ${String(error)}`);
       }
     }
 
-    await this.setMiniAppMenuButton();
+    const storedMenuButtonFingerprint = storedFingerprints[plans.length];
+    if (
+      this.config.miniAppBaseUrl &&
+      storedMenuButtonFingerprint !== menuButtonFingerprint &&
+      await this.setMiniAppMenuButton()
+    ) {
+      await this.redis.set(menuButtonKey, menuButtonFingerprint);
+    }
+
+    // The global fingerprint is written by syncCommands only when every
+    // required command scope succeeded.
+    if (failures.length > 0) {
+      throw new Error(`Telegram menu sync failed — ${failures.join("; ")}`);
+    }
   }
 
   /**
@@ -1243,9 +1297,9 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
    * failed to update is still fully usable, so this must not fail the sync and
    * leave the fingerprint unwritten.
    */
-  protected async setMiniAppMenuButton(): Promise<void> {
+  protected async setMiniAppMenuButton(): Promise<boolean> {
     const baseUrl = this.config.miniAppBaseUrl;
-    if (!baseUrl) return;
+    if (!baseUrl) return true;
     try {
       const response = await fetch(`${this.apiUrl}/setChatMenuButton`, {
         method: "POST",
@@ -1262,9 +1316,12 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
         console.error(
           `Failed to set the Telegram menu button: ${response.status} ${await response.text()}`,
         );
+        return false;
       }
+      return true;
     } catch (error) {
       console.error("Failed to set the Telegram menu button:", error);
+      return false;
     }
   }
 

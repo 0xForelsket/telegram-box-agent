@@ -1,6 +1,7 @@
 import { getConfig, type Env } from '../../env';
 import type { RedisClient } from '../../utils/redis';
 import { UserFacingError } from '../../utils/user_facing_error';
+import { globalFetch } from '../../utils/helpers';
 import {
   ACTION_CATALOG,
   describeAction,
@@ -50,7 +51,7 @@ export class ActionBroker {
     this.store = dependencies.store ?? new ActionStore(redis);
     this.jobs = dependencies.jobs ?? new BoxJobStore(redis);
     this.sendMessage = dependencies.sendMessage ?? (async () => undefined);
-    this.fetchImpl = dependencies.fetchImpl ?? fetch;
+    this.fetchImpl = dependencies.fetchImpl ?? globalFetch;
     this.now = dependencies.now ?? Date.now;
   }
 
@@ -224,7 +225,8 @@ export class ActionBroker {
   }
 
   private async execute(record: BrokeredAction): Promise<string> {
-    switch (record.action) {
+    const action = record.action;
+    switch (action) {
       case 'github.issue_comment':
         return await this.githubRequest(
           `/repos/${record.params.owner}/${record.params.repo}/issues/${record.params.issue_number}/comments`,
@@ -235,6 +237,8 @@ export class ActionBroker {
           `/repos/${record.params.owner}/${record.params.repo}/issues`,
           { title: String(record.params.title), body: String(record.params.body) },
         );
+      default:
+        return assertNever(action);
     }
   }
 
@@ -283,6 +287,10 @@ export class ActionBroker {
       throw new UserFacingError('Only the bot owner can approve or deny brokered actions.');
     }
   }
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unsupported brokered action reached execution: ${String(value)}`);
 }
 
 function formatApprovalRequest(record: BrokeredAction, nonce: string): string {

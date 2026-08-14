@@ -1,4 +1,9 @@
 import { RUNTIME_BUDGETS } from '../config/runtime_budgets';
+import {
+  DEFAULT_FETCH_TIMEOUT_MS,
+  globalFetch,
+  withTimeoutSignal,
+} from '../utils/helpers';
 
 export interface ReadPageResult {
   url: string;
@@ -92,8 +97,12 @@ export class URLReader {
 
   async read(rawUrl: string, signal?: AbortSignal): Promise<ReadPageResult> {
     let url = this.validateUrl(rawUrl);
+    const requestSignal = withTimeoutSignal(signal, DEFAULT_FETCH_TIMEOUT_MS);
     for (let redirects = 0; redirects <= URLReader.MAX_REDIRECTS; redirects++) {
-      const response = await fetch(url.toString(), { redirect: 'manual', signal });
+      const response = await globalFetch(url.toString(), {
+        redirect: 'manual',
+        signal: requestSignal,
+      });
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location');
         if (!location || redirects === URLReader.MAX_REDIRECTS) {

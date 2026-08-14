@@ -1,4 +1,5 @@
 import type { RedisClient } from '../../utils/redis';
+import { constantTimeEqual, hashToken } from '../../utils/helpers';
 
 const RECORD_PREFIX = 'box_artifact:v1:';
 const JOB_INDEX_PREFIX = 'box_artifacts:v1:job:';
@@ -68,7 +69,10 @@ export class ArtifactStore {
       contentType: sanitizeContentType(input.contentType),
       declaredSize: input.declaredSize,
       status: 'authorized',
-      uploadTokenHash: await hashToken(input.uploadToken),
+      uploadTokenHash: await hashToken(input.uploadToken, {
+        label: 'artifact token',
+        minLength: 16,
+      }),
       uploadTokenValue: input.uploadToken,
       idempotencyKey: input.idempotencyKey,
       uploadExpiresAt: input.uploadExpiresAt,
@@ -128,7 +132,11 @@ export class ArtifactStore {
   async verifyUploadToken(id: string, token: string): Promise<BoxArtifact | null> {
     const artifact = await this.get(id);
     if (!artifact) return null;
-    return constantTimeEqual(artifact.uploadTokenHash, await hashToken(token)) ? artifact : null;
+    const suppliedHash = await hashToken(token, {
+      label: 'artifact token',
+      minLength: 16,
+    });
+    return constantTimeEqual(artifact.uploadTokenHash, suppliedHash) ? artifact : null;
   }
 
   async getByIdempotencyKey(jobId: string, idempotencyKey: string): Promise<BoxArtifact | null> {
@@ -231,18 +239,4 @@ function normalizeId(value: string, label: string): string {
   const normalized = value.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9_-]{5,39}$/.test(normalized)) throw new Error(`Invalid ${label}.`);
   return normalized;
-}
-
-async function hashToken(value: string): Promise<string> {
-  const normalized = value.trim();
-  if (!/^[a-zA-Z0-9_-]{16,128}$/.test(normalized)) throw new Error('Invalid artifact token.');
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
-  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function constantTimeEqual(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
-  let mismatch = 0;
-  for (let index = 0; index < left.length; index++) mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  return mismatch === 0;
 }

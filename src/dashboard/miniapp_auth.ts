@@ -1,3 +1,5 @@
+import { bytesToHex, constantTimeEqual } from '../utils/helpers';
+
 /**
  * Telegram Mini App `initData` verification.
  *
@@ -144,14 +146,5 @@ async function hmac(key: ArrayBuffer | Uint8Array, message: string): Promise<Arr
 }
 
 function toHex(buffer: ArrayBuffer): string {
-  return [...new Uint8Array(buffer)].map(byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function constantTimeEqual(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
-  let mismatch = 0;
-  for (let index = 0; index < left.length; index++) {
-    mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  }
-  return mismatch === 0;
+  return bytesToHex(buffer);
 }
