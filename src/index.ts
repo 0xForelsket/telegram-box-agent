@@ -1,6 +1,7 @@
 import { Env } from './env';
 import TelegramBot from './api/telegram';
 import { dashboardHtml } from './dashboard/dashboard';
+import { miniAppHtml } from './dashboard/miniapp';
 import { LockContentionError } from './utils/redis';
 
 export default {
@@ -10,6 +11,10 @@ export default {
     try {
       if (url.pathname === '/dashboard' && request.method === 'GET') {
         return dashboardHtml();
+      }
+
+      if (url.pathname === '/miniapp' && request.method === 'GET') {
+        return miniAppHtml();
       }
 
       const bot = new TelegramBot(env, ctx);
@@ -53,6 +58,10 @@ export default {
 
       if (url.pathname === '/dashboard/api' && request.method === 'GET') {
         return await bot.handleDashboardApi(request);
+      }
+
+      if (url.pathname === '/miniapp/api') {
+        return await bot.handleMiniAppApi(request);
       }
 
       if (url.pathname === '/' || url.pathname === '') {

@@ -109,6 +109,11 @@ export interface TelegramCommandBot {
   createBoxAgentSchedule(chatId: number, userId: string, cron: string, prompt: string, requestedRoute?: string): Promise<string>;
   listBoxAgentSchedules(chatId: number, userId: string): Promise<string>;
   changeBoxAgentSchedule(chatId: number, userId: string, id: string, action: 'pause' | 'resume' | 'delete'): Promise<string>;
+  /**
+   * Commands the Mini App presents as UI. They keep working when typed; they
+   * are only withheld from the registered Telegram menu so they stop taking a
+   * row each. Unregistering is not deprecation.
+   */
   listArtifacts(chatId: number, userId: string): Promise<string>;
   listBrokeredActions(chatId: number, userId: string): Promise<string>;
   approveBrokeredAction(chatId: number, userId: string, actionId: string, nonce: string): Promise<string>;

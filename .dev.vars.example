@@ -17,6 +17,11 @@ WHITELISTED_GROUPS=
 # to UTC with a logged warning rather than failing startup.
 DEFAULT_TIMEZONE=UTC
 
+# Origin the Telegram menu button opens for the Mini App console. Defaults to
+# DASHBOARD_BASE_URL. The domain must also be linked to the bot in BotFather
+# with /setdomain, or Telegram refuses to open it.
+MINIAPP_BASE_URL=
+
 # Upstash Redis REST
 UPSTASH_REDIS_REST_URL=https://replace-me.upstash.io
 UPSTASH_REDIS_REST_TOKEN=replace-me

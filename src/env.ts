@@ -27,6 +27,7 @@ export interface Env {
   VISION_MODEL?: string;
   VISION_MODELS?: string;
   DASHBOARD_BASE_URL?: string;
+  MINIAPP_BASE_URL?: string;
   MODEL_FALLBACKS?: string;
   UPSTASH_REDIS_REST_URL: string;
   UPSTASH_REDIS_REST_TOKEN: string;
@@ -107,6 +108,7 @@ interface AppConfig {
   visionModel?: string;
   visionModels: string[];
   dashboardBaseUrl?: string;
+  miniAppBaseUrl?: string;
   modelFallbacks: string[];
   upstashRedisRestUrl: string;
   upstashRedisRestToken: string;
@@ -222,6 +224,10 @@ export const getConfig = (env: Env): AppConfig => {
       ? env.VISION_MODELS.split(',').map(model => model.trim()).filter(Boolean)
       : [],
     dashboardBaseUrl: env.DASHBOARD_BASE_URL?.trim().replace(/\/+$/, '') || undefined,
+    // Falls back to the dashboard origin: both are served by this Worker, so a
+    // deployment that set one almost never means a different host for the other.
+    miniAppBaseUrl:
+      (env.MINIAPP_BASE_URL ?? env.DASHBOARD_BASE_URL)?.trim().replace(/\/+$/, '') || undefined,
     modelFallbacks: env.MODEL_FALLBACKS
       ? env.MODEL_FALLBACKS.split(',').map(model => model.trim()).filter(Boolean)
       : [],

@@ -132,6 +132,8 @@ export abstract class TelegramBotBase implements TelegramCommandBot {
 
   abstract handleDashboardApi(request: Request): Promise<Response>;
 
+  abstract handleMiniAppApi(request: Request): Promise<Response>;
+
   protected abstract runBackground(
     label: string,
     fn: () => Promise<void>,

@@ -13,12 +13,17 @@ import { SharedScheduler } from "../../scheduling/scheduler";
 import { AudioAPI } from "../audio";
 import { TelegramStreamingReply } from "../../telegram/streaming_reply";
 import { DashboardAccess } from "../../dashboard/dashboard";
+import { verifyMiniAppInitData } from "../../dashboard/miniapp_auth";
 import {
   classifyBoxRoute,
   type BoxRouteDecision,
 } from "../../agent/box/hybrid_router";
 import { isBoxAdmissionError } from "../../agent/box/box_job_service";
 import { MODEL_CALLBACK_PREFIX } from "../../config/callback_data";
+import {
+  buildMenuScopePlans,
+  MENU_SCHEMA_VERSION,
+} from "../../config/menu_scope";
 import { isUserFacingError } from "../../utils/user_facing_error";
 import type { PromptFiles } from "@upstash/box";
 
@@ -166,6 +171,160 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
         },
       },
     );
+  }
+
+  /**
+   * `POST /miniapp/api` — data for the Mini App tabs.
+   *
+   * Authorization comes from Telegram's signed `initData`, so the caller's user
+   * ID is proven rather than claimed, and the same whitelist that gates chat
+   * gates this. Read-only: nothing here mutates state.
+   */
+  async handleMiniAppApi(request: Request): Promise<Response> {
+    if (request.method !== "POST") {
+      return miniAppError("Method not allowed.", 405);
+    }
+    let initData = "";
+    try {
+      const body = (await request.json()) as { initData?: unknown };
+      initData = typeof body.initData === "string" ? body.initData : "";
+    } catch {
+      return miniAppError("Invalid request body.", 400);
+    }
+
+    const verified = await verifyMiniAppInitData({
+      initData,
+      botToken: this.token,
+    });
+    if (!verified.valid) {
+      console.error("Mini App rejected a launch payload:", verified.reason);
+      return miniAppError("This session is not valid. Reopen the app.", 401);
+    }
+
+    const { userId, chatId: launchChatId } = verified.identity;
+    // A menu-button launch happens in the private chat, where the chat ID is
+    // the user's own ID and the session key is the user ID.
+    const chatId = launchChatId ?? Number(userId);
+    const chatType = launchChatId ? "group" : "private";
+    if (!this.isAuthorized({ userId, chatId, chatType })) {
+      return miniAppError("You are not authorized to use this bot.", 403);
+    }
+
+    const sessionKey = this.getSessionKey(chatId, userId, chatType);
+    const owner = this.isOwner(userId);
+    try {
+      return Response.json(await this.buildMiniAppPayload(sessionKey, chatId, userId, owner), {
+        headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+      });
+    } catch (error) {
+      console.error("Mini App payload failed:", error);
+      return miniAppError("Could not load bot data.", 500);
+    }
+  }
+
+  protected async buildMiniAppPayload(
+    sessionKey: string,
+    chatId: number,
+    userId: string,
+    owner: boolean,
+  ): Promise<Record<string, unknown>> {
+    const scheduler = new SharedScheduler(this.redis);
+    const [status, day, jobs, bookmarks, feeds, people, topics, summary, sources] =
+      await Promise.all([
+        this.getStatus(sessionKey),
+        this.usageTracker.getReport("day"),
+        scheduler.list(sessionKey),
+        this.getBookmarks(sessionKey),
+        this.getFeedSubscriptions(sessionKey),
+        this.getPersonCards(sessionKey),
+        this.getActiveTopics(sessionKey),
+        this.getConversationSummary(sessionKey),
+        this.getLastSources(sessionKey),
+      ]);
+
+    const cacheModels = this.config.openaiCompatibleModels.filter((model) =>
+      /deepseek/i.test(model),
+    );
+    const cacheReports = await Promise.all(
+      cacheModels.map((model) => this.usageTracker.getModelCacheReport("month", model)),
+    );
+    const hits = cacheReports.reduce((sum, report) => sum + report.cacheHitTokens, 0);
+    const misses = cacheReports.reduce((sum, report) => sum + report.cacheMissTokens, 0);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      chatLabel: sessionKey.startsWith("group:") ? "Group session" : "Private session",
+      status,
+      usage: {
+        day,
+        cacheHitRate: hits + misses > 0 ? `${((hits / (hits + misses)) * 100).toFixed(1)}%` : "n/a",
+      },
+      reminders: jobs
+        .filter((job) => job.type === "reminder")
+        .map((job) => ({
+          id: job.id,
+          text: job.payload.text ?? "(no text)",
+          when: this.formatScheduledTime(job.nextAt),
+          recurrence: job.recurrence ?? null,
+        })),
+      digests: jobs
+        .filter((job) => job.type === "digest")
+        .map((job) => ({
+          id: job.id,
+          label: [job.payload.mode, job.payload.query].filter(Boolean).join(" "),
+          when: this.formatScheduledTime(job.nextAt),
+          recurrence: job.recurrence ?? "once",
+        })),
+      bookmarks: bookmarks.map((bookmark) => ({ id: bookmark.id, title: bookmark.title, url: bookmark.url })),
+      feeds: feeds.map((feed) => ({ id: feed.id, title: feed.title, url: feed.url })),
+      people: people.map((card) => ({ name: card.name, notes: card.notes.join(" · ") })),
+      topics: topics.map((topic) => ({ topic: topic.topic, status: topic.status ?? "" })),
+      summary,
+      sources,
+      agent: owner ? await this.buildMiniAppAgentSection(chatId, userId) : null,
+    };
+  }
+
+  /** Box state is bound-group scoped and owner-gated, so it is a separate
+   * section rather than part of the per-session payload. */
+  protected async buildMiniAppAgentSection(
+    chatId: number,
+    userId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const service = this.boxJobs();
+    const boundChatId = await service.getBoundChatId();
+    if (boundChatId === null) return { quota: null, jobs: [], artifacts: [], actions: [] };
+
+    const [quota, jobs, artifacts, actions] = await Promise.all([
+      service.getQuotaState(boundChatId, userId),
+      service.getStatus(boundChatId, userId, true).then((result) =>
+        Array.isArray(result) ? result : [result],
+      ),
+      this.artifactGateway().listForUser({ chatId: boundChatId, userId, owner: true, limit: 15 }),
+      this.actionBroker().listForChat(boundChatId, 15),
+    ]);
+    void chatId;
+
+    return {
+      quota,
+      jobs: jobs.slice(0, 10).map((job) => ({
+        id: job.id,
+        status: job.status,
+        route: `${job.route}/${job.model}`,
+        request: job.request.replace(/\s+/g, " ").slice(0, 120),
+      })),
+      artifacts: artifacts.map(({ artifact, retentionDaysLeft }) => ({
+        id: artifact.id,
+        filename: artifact.filename,
+        size: formatMiniAppBytes(artifact.actualSize ?? artifact.declaredSize),
+        retention: retentionDaysLeft > 0 ? `${retentionDaysLeft}d left` : "expiring",
+      })),
+      actions: actions.map((record) => ({
+        id: record.id,
+        status: record.status,
+        action: record.action,
+      })),
+    };
   }
 
   public async executeCommand(
@@ -852,10 +1011,12 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
   }
 
   protected getCommandSchemaFingerprint(): string {
-    const schema = this.commands
-      .map((command) => `${command.name}:${command.description}`)
-      .sort()
-      .join("|");
+    const schema = [
+      `menu-v${MENU_SCHEMA_VERSION}`,
+      ...this.commands
+        .map((command) => `${command.name}:${command.description}`)
+        .sort(),
+    ].join("|");
     let hash = 2166136261;
     for (let index = 0; index < schema.length; index += 1) {
       hash ^= schema.charCodeAt(index);
@@ -1030,21 +1191,68 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
    */
 
   protected async setMenuButton(): Promise<void> {
-    const response = await fetch(`${this.apiUrl}/setMyCommands`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        commands: this.commands.map((command) => ({
-          command: command.name,
-          description: translate(command.description),
-        })),
-      }),
+    const plans = buildMenuScopePlans({
+      commands: this.commands.map((command) => ({
+        name: command.name,
+        description: translate(command.description),
+      })),
+      ownerUserId: this.config.ownerUserId,
+      boundChatId: await this.boxJobs()
+        .getBoundChatId()
+        .catch(() => null),
     });
 
-    if (!response.ok) {
-      throw new Error(
-        `Failed to set the Telegram command menu: ${response.statusText}`,
-      );
+    for (const plan of plans) {
+      const response = await fetch(`${this.apiUrl}/setMyCommands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: plan.scope,
+          commands: plan.commands.map((command) => ({
+            command: command.name,
+            description: command.description,
+          })),
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(
+          `Failed to set the Telegram command menu for scope ${plan.scope.type}: ${response.statusText}`,
+        );
+      }
+    }
+
+    await this.setMiniAppMenuButton();
+  }
+
+  /**
+   * Points the chat menu button at the Mini App.
+   *
+   * Best-effort: a bot whose command menu is correct but whose menu button
+   * failed to update is still fully usable, so this must not fail the sync and
+   * leave the fingerprint unwritten.
+   */
+  protected async setMiniAppMenuButton(): Promise<void> {
+    const baseUrl = this.config.miniAppBaseUrl;
+    if (!baseUrl) return;
+    try {
+      const response = await fetch(`${this.apiUrl}/setChatMenuButton`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          menu_button: {
+            type: "web_app",
+            text: "Console",
+            web_app: { url: `${baseUrl.replace(/\/+$/, "")}/miniapp` },
+          },
+        }),
+      });
+      if (!response.ok) {
+        console.error(
+          `Failed to set the Telegram menu button: ${response.status} ${await response.text()}`,
+        );
+      }
+    } catch (error) {
+      console.error("Failed to set the Telegram menu button:", error);
     }
   }
 
@@ -1165,6 +1373,19 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
       .replace(/\s{2,}/g, " ")
       .trim();
   }
+}
+
+function miniAppError(message: string, status: number): Response {
+  return Response.json(
+    { error: message },
+    { status, headers: { "Cache-Control": "no-store" } },
+  );
+}
+
+function formatMiniAppBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export default TelegramMessageHandlingBot;
