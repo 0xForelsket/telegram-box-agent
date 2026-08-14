@@ -1,4 +1,5 @@
 import { Command } from "../command_types";
+import { dispatchSubcommand } from "./subcommand";
 import { translate } from "../../utils/i18n";
 import { sendChatAction } from "../../utils/helpers";
 import { getConfig } from "../../env";
@@ -128,128 +129,118 @@ export const utilitiesCommands: Command[] = [
   {
     name: "remind",
     description: "remind_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      try {
-        await bot.sendMessageWithFallback(
-          chatId,
-          await bot.addReminder(chatId, sessionKey, args.join(" ")),
-        );
-      } catch (error) {
-        await bot.sendMessageWithFallback(
-          chatId,
-          error instanceof Error
-            ? error.message
-            : await userMessage(bot, userId, "reminder_failed"),
-        );
-      }
-    },
-  },
-  {
-    name: "reminders",
-    description: "reminders_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-    ) => {
-      await bot.sendMessageWithFallback(
-        chatId,
-        (await bot.listReminders(sessionKey)) ||
-          (await userMessage(bot, userId, "no_reminders")),
-      );
-    },
-  },
-  {
-    name: "unremind",
-    description: "unremind_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      const removed = args[0]
-        ? await bot.removeReminder(sessionKey, args[0])
-        : null;
-      await bot.sendMessageWithFallback(
-        chatId,
-        removed
-          ? await userMessage(bot, userId, "reminder_removed", {
-              value: removed,
-            })
-          : await userMessage(bot, userId, "reminder_not_found"),
-      );
-    },
+    action: dispatchSubcommand({
+      usage: "Usage: /remind <when> <text>\n/remind list\n/remind rm <id>",
+      // Bare `/remind in 20m water` stays the primary form.
+      fallback: async ({ chatId, sessionKey, userId, bot, args }) => {
+        if (args.length === 0) {
+          await bot.sendMessageWithFallback(
+            chatId,
+            "Usage: /remind <when> <text>\n/remind list\n/remind rm <id>",
+          );
+          return;
+        }
+        try {
+          await bot.sendMessageWithFallback(
+            chatId,
+            await bot.addReminder(chatId, sessionKey, args.join(" ")),
+          );
+        } catch (error) {
+          await bot.sendMessageWithFallback(
+            chatId,
+            error instanceof Error
+              ? error.message
+              : await userMessage(bot, userId, "reminder_failed"),
+          );
+        }
+      },
+      subcommands: [
+        {
+          keywords: ["list", "ls"],
+          handler: async ({ chatId, sessionKey, userId, bot }) => {
+            await bot.sendMessageWithFallback(
+              chatId,
+              (await bot.listReminders(sessionKey)) ||
+                (await userMessage(bot, userId, "no_reminders")),
+            );
+          },
+        },
+        {
+          keywords: ["rm", "remove", "delete", "cancel"],
+          handler: async ({ chatId, sessionKey, userId, bot, args }) => {
+            const removed = args[0]
+              ? await bot.removeReminder(sessionKey, args[0])
+              : null;
+            await bot.sendMessageWithFallback(
+              chatId,
+              removed
+                ? await userMessage(bot, userId, "reminder_removed", {
+                    value: removed,
+                  })
+                : await userMessage(bot, userId, "reminder_not_found"),
+            );
+          },
+        },
+      ],
+    }),
   },
   {
     name: "digest",
     description: "digest_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      try {
-        await bot.sendMessageWithFallback(
-          chatId,
-          await bot.addDigest(chatId, sessionKey, args.join(" ")),
-        );
-      } catch (error) {
-        await bot.sendMessageWithFallback(
-          chatId,
-          error instanceof Error
-            ? error.message
-            : await userMessage(bot, userId, "digest_failed"),
-        );
-      }
-    },
-  },
-  {
-    name: "digests",
-    description: "digests_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-    ) => {
-      await bot.sendMessageWithFallback(
-        chatId,
-        (await bot.listDigests(sessionKey)) ||
-          (await userMessage(bot, userId, "no_digests")),
-      );
-    },
-  },
-  {
-    name: "undigest",
-    description: "undigest_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      const removed = args[0]
-        ? await bot.removeDigest(sessionKey, args[0])
-        : null;
-      await bot.sendMessageWithFallback(
-        chatId,
-        removed
-          ? await userMessage(bot, userId, "digest_removed", { value: removed })
-          : await userMessage(bot, userId, "digest_not_found"),
-      );
-    },
+    action: dispatchSubcommand({
+      usage:
+        "Usage: /digest <daily|weekly> <time> <feeds|search|stock> [query]\n/digest list\n/digest rm <id>",
+      fallback: async ({ chatId, sessionKey, userId, bot, args }) => {
+        if (args.length === 0) {
+          await bot.sendMessageWithFallback(
+            chatId,
+            "Usage: /digest <daily|weekly> <time> <feeds|search|stock> [query]\n/digest list\n/digest rm <id>",
+          );
+          return;
+        }
+        try {
+          await bot.sendMessageWithFallback(
+            chatId,
+            await bot.addDigest(chatId, sessionKey, args.join(" ")),
+          );
+        } catch (error) {
+          await bot.sendMessageWithFallback(
+            chatId,
+            error instanceof Error
+              ? error.message
+              : await userMessage(bot, userId, "digest_failed"),
+          );
+        }
+      },
+      subcommands: [
+        {
+          keywords: ["list", "ls"],
+          handler: async ({ chatId, sessionKey, userId, bot }) => {
+            await bot.sendMessageWithFallback(
+              chatId,
+              (await bot.listDigests(sessionKey)) ||
+                (await userMessage(bot, userId, "no_digests")),
+            );
+          },
+        },
+        {
+          keywords: ["rm", "remove", "delete"],
+          handler: async ({ chatId, sessionKey, userId, bot, args }) => {
+            const removed = args[0]
+              ? await bot.removeDigest(sessionKey, args[0])
+              : null;
+            await bot.sendMessageWithFallback(
+              chatId,
+              removed
+                ? await userMessage(bot, userId, "digest_removed", {
+                    value: removed,
+                  })
+                : await userMessage(bot, userId, "digest_not_found"),
+            );
+          },
+        },
+      ],
+    }),
   },
   {
     name: "speak",
@@ -465,108 +456,89 @@ export const utilitiesCommands: Command[] = [
   {
     name: "feed",
     description: "feed_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      const url = args[0];
-      if (!url) {
-        await bot.sendMessageWithFallback(
-          chatId,
-          await userMessage(bot, userId, "feed_usage"),
-        );
-        return;
-      }
-      try {
-        const count = Number.parseInt(args[1] || "5", 10) || 5;
-        await bot.sendMessageWithFallback(
-          chatId,
-          formatFeed(await readFeed(url, count, AbortSignal.timeout(10_000))),
-        );
-      } catch (error) {
-        await bot.sendMessageWithFallback(
-          chatId,
-          error instanceof Error
-            ? error.message
-            : await userMessage(bot, userId, "feed_failed"),
-        );
-      }
-    },
-  },
-  {
-    name: "followfeed",
-    description: "followfeed_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      if (!args[0]) {
-        await bot.sendMessageWithFallback(
-          chatId,
-          await userMessage(bot, userId, "follow_feed_usage"),
-        );
-        return;
-      }
-      try {
-        const id = await bot.addFeedSubscription(sessionKey, args[0]);
-        await bot.sendMessageWithFallback(
-          chatId,
-          await userMessage(bot, userId, "feed_followed", { value: id }),
-        );
-      } catch (error) {
-        await bot.sendMessageWithFallback(
-          chatId,
-          error instanceof Error
-            ? error.message
-            : await userMessage(bot, userId, "follow_feed_failed"),
-        );
-      }
-    },
-  },
-  {
-    name: "feeds",
-    description: "feeds_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-    ) => {
-      await bot.sendMessageWithFallback(
-        chatId,
-        (await bot.listFeedSubscriptions(sessionKey)) ||
-          (await userMessage(bot, userId, "no_feeds")),
-      );
-    },
-  },
-  {
-    name: "unfollowfeed",
-    description: "unfollowfeed_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      const removed = args[0]
-        ? await bot.removeFeedSubscription(sessionKey, args[0])
-        : null;
-      await bot.sendMessageWithFallback(
-        chatId,
-        removed
-          ? await userMessage(bot, userId, "feed_unfollowed", {
-              value: removed,
-            })
-          : await userMessage(bot, userId, "feed_not_found"),
-      );
-    },
+    action: dispatchSubcommand({
+      usage:
+        "Usage: /feed <url> [count]\n/feed follow <url>\n/feed list\n/feed rm <id>",
+      // Bare `/feed <url>` reads a feed without subscribing to it.
+      fallback: async ({ chatId, userId, bot, args }) => {
+        const url = args[0];
+        if (!url) {
+          await bot.sendMessageWithFallback(
+            chatId,
+            await userMessage(bot, userId, "feed_usage"),
+          );
+          return;
+        }
+        try {
+          const count = Number.parseInt(args[1] || "5", 10) || 5;
+          await bot.sendMessageWithFallback(
+            chatId,
+            formatFeed(await readFeed(url, count, AbortSignal.timeout(10_000))),
+          );
+        } catch (error) {
+          await bot.sendMessageWithFallback(
+            chatId,
+            error instanceof Error
+              ? error.message
+              : await userMessage(bot, userId, "feed_failed"),
+          );
+        }
+      },
+      subcommands: [
+        {
+          keywords: ["follow", "add", "subscribe"],
+          handler: async ({ chatId, sessionKey, userId, bot, args }) => {
+            if (!args[0]) {
+              await bot.sendMessageWithFallback(
+                chatId,
+                await userMessage(bot, userId, "follow_feed_usage"),
+              );
+              return;
+            }
+            try {
+              const id = await bot.addFeedSubscription(sessionKey, args[0]);
+              await bot.sendMessageWithFallback(
+                chatId,
+                await userMessage(bot, userId, "feed_followed", { value: id }),
+              );
+            } catch (error) {
+              await bot.sendMessageWithFallback(
+                chatId,
+                error instanceof Error
+                  ? error.message
+                  : await userMessage(bot, userId, "follow_feed_failed"),
+              );
+            }
+          },
+        },
+        {
+          keywords: ["list", "ls"],
+          handler: async ({ chatId, sessionKey, userId, bot }) => {
+            await bot.sendMessageWithFallback(
+              chatId,
+              (await bot.listFeedSubscriptions(sessionKey)) ||
+                (await userMessage(bot, userId, "no_feeds")),
+            );
+          },
+        },
+        {
+          keywords: ["rm", "remove", "unfollow", "delete"],
+          handler: async ({ chatId, sessionKey, userId, bot, args }) => {
+            const removed = args[0]
+              ? await bot.removeFeedSubscription(sessionKey, args[0])
+              : null;
+            await bot.sendMessageWithFallback(
+              chatId,
+              removed
+                ? await userMessage(bot, userId, "feed_unfollowed", {
+                    value: removed,
+                  })
+                : await userMessage(bot, userId, "feed_not_found"),
+            );
+          },
+        },
+      ],
+    }),
   },
   {
     name: "github",

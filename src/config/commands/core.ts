@@ -2,6 +2,7 @@ import { Command } from "../command_types";
 import { translate, translateMessage, UserMessageKey } from "../../utils/i18n";
 import { commands } from "../commands";
 import { encodeModelCallbackData, fitsCallbackData } from "../callback_data";
+import { dispatchSubcommand } from "./subcommand";
 import {
   formatProviderHealth,
   requireGroupAdmin,
@@ -209,112 +210,72 @@ export const coreCommands: Command[] = [
   {
     name: "groupprofile",
     description: "groupprofile_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      if (!(await requireGroupAdmin(chatId, sessionKey, userId, bot))) {
-        return;
-      }
-
-      const profile = await bot.getGroupProfile(sessionKey);
-      if (!profile) {
+    action: dispatchSubcommand({
+      usage:
+        "Usage: /groupprofile\n/groupprofile set <text>\n/groupprofile add <text>\n/groupprofile clear",
+      // Bare `/groupprofile` still shows the profile.
+      fallback: async ({ chatId, sessionKey, userId, bot }) => {
+        if (!(await requireGroupAdmin(chatId, sessionKey, userId, bot))) return;
+        const profile = await bot.getGroupProfile(sessionKey);
         await bot.sendMessageWithFallback(
           chatId,
-          await userMessage(bot, userId, "no_group_profile"),
+          profile
+            ? await userMessage(bot, userId, "group_profile", { profile })
+            : await userMessage(bot, userId, "no_group_profile"),
         );
-        return;
-      }
-
-      await bot.sendMessageWithFallback(
-        chatId,
-        await userMessage(bot, userId, "group_profile", { profile }),
-      );
-    },
-  },
-  {
-    name: "setgroupprofile",
-    description: "setgroupprofile_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      if (!(await requireGroupAdmin(chatId, sessionKey, userId, bot))) {
-        return;
-      }
-
-      const profile = args.join(" ").trim();
-      if (!profile) {
-        await bot.sendMessageWithFallback(
-          chatId,
-          await userMessage(bot, userId, "set_group_profile_usage"),
-        );
-        return;
-      }
-
-      await bot.setGroupProfile(sessionKey, profile);
-      await bot.sendMessageWithFallback(
-        chatId,
-        await userMessage(bot, userId, "group_profile_updated"),
-      );
-    },
-  },
-  {
-    name: "addgroupprofile",
-    description: "addgroupprofile_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      if (!(await requireGroupAdmin(chatId, sessionKey, userId, bot))) {
-        return;
-      }
-
-      const note = args.join(" ").trim();
-      if (!note) {
-        await bot.sendMessageWithFallback(
-          chatId,
-          await userMessage(bot, userId, "add_group_profile_usage"),
-        );
-        return;
-      }
-
-      await bot.appendGroupProfile(sessionKey, note);
-      await bot.sendMessageWithFallback(
-        chatId,
-        await userMessage(bot, userId, "group_profile_added"),
-      );
-    },
-  },
-  {
-    name: "cleargroupprofile",
-    description: "cleargroupprofile_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      if (!(await requireGroupAdmin(chatId, sessionKey, userId, bot))) {
-        return;
-      }
-
-      await bot.clearGroupProfile(sessionKey);
-      await bot.sendMessageWithFallback(
-        chatId,
-        await userMessage(bot, userId, "group_profile_cleared"),
-      );
-    },
+      },
+      subcommands: [
+        {
+          keywords: ["set"],
+          handler: async ({ chatId, sessionKey, userId, bot, args }) => {
+            if (!(await requireGroupAdmin(chatId, sessionKey, userId, bot))) return;
+            const profile = args.join(" ").trim();
+            if (!profile) {
+              await bot.sendMessageWithFallback(
+                chatId,
+                await userMessage(bot, userId, "set_group_profile_usage"),
+              );
+              return;
+            }
+            await bot.setGroupProfile(sessionKey, profile);
+            await bot.sendMessageWithFallback(
+              chatId,
+              await userMessage(bot, userId, "group_profile_updated"),
+            );
+          },
+        },
+        {
+          keywords: ["add", "append"],
+          handler: async ({ chatId, sessionKey, userId, bot, args }) => {
+            if (!(await requireGroupAdmin(chatId, sessionKey, userId, bot))) return;
+            const note = args.join(" ").trim();
+            if (!note) {
+              await bot.sendMessageWithFallback(
+                chatId,
+                await userMessage(bot, userId, "add_group_profile_usage"),
+              );
+              return;
+            }
+            await bot.appendGroupProfile(sessionKey, note);
+            await bot.sendMessageWithFallback(
+              chatId,
+              await userMessage(bot, userId, "group_profile_added"),
+            );
+          },
+        },
+        {
+          keywords: ["clear", "reset"],
+          handler: async ({ chatId, sessionKey, userId, bot }) => {
+            if (!(await requireGroupAdmin(chatId, sessionKey, userId, bot))) return;
+            await bot.clearGroupProfile(sessionKey);
+            await bot.sendMessageWithFallback(
+              chatId,
+              await userMessage(bot, userId, "group_profile_cleared"),
+            );
+          },
+        },
+      ],
+    }),
   },
   {
     name: "synccommands",

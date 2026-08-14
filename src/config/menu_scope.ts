@@ -18,22 +18,23 @@
  * to *which scope* a command lands in is invisible to it. Without this the menu
  * would keep serving the previous split until an unrelated command changed.
  */
-export const MENU_SCHEMA_VERSION = 2;
+export const MENU_SCHEMA_VERSION = 3;
 
-/** Rendered as tabs in the Mini App; typing them still works. */
+/**
+ * Rendered as tabs in the Mini App; typing them still works.
+ *
+ * The list *legs* of the consolidated families are no longer commands at all —
+ * they are `/remind list`, `/feed list` and so on — so only genuinely
+ * standalone read-only commands remain here.
+ */
 export const MINIAPP_ABSORBED_COMMANDS = new Set([
   'status',
   'usage',
   'cache',
-  'reminders',
-  'digests',
-  'feeds',
-  'bookmarks',
   'people',
   'topics',
   'memory',
   'sources',
-  'groupprofile',
   'history',
 ]);
 
@@ -54,9 +55,6 @@ export const GROUP_ONLY_COMMANDS = new Set([
   'quick',
   'artifact',
   'action',
-  'setgroupprofile',
-  'addgroupprofile',
-  'cleargroupprofile',
   'groupprofile',
 ]);
 

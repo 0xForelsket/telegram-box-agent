@@ -179,6 +179,19 @@ Core agent commands:
 - `/action approve <action-id> <nonce>` / `/action deny <action-id>` — owner-only
 - `/box enable` — owner-only binding of Box to the current numeric group ID
 
+Noun-shaped features use subcommands rather than a command per verb, following
+the same pattern as `/agent`:
+
+- `/remind <when> <text>` · `/remind list` · `/remind rm <id>`
+- `/digest <schedule> <mode> [query]` · `/digest list` · `/digest rm <id>`
+- `/feed <url>` · `/feed follow <url>` · `/feed list` · `/feed rm <id>`
+- `/bookmark <url> [title]` · `/bookmark list` · `/bookmark rm <id>`
+- `/groupprofile` · `/groupprofile set|add|clear`
+
+The bare form is always the primary action, so `/remind in 20m water` needs no
+keyword. Retired names such as `/unremind` reply with their replacement rather
+than failing.
+
 Run `/help` for chat, search, memory, utility, audio, reminder, and digest
 commands.
 

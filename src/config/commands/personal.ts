@@ -5,81 +5,69 @@ import { sendChatAction } from "../../utils/helpers";
 import { FluxAPI } from "../../api/flux-cf";
 import { getConfig } from "../../env";
 import { requireGroupAdmin, type TelegramBot, userMessage } from "./shared";
+import { dispatchSubcommand } from "./subcommand";
 
 export const personalCommands: Command[] = [
   {
     name: "bookmark",
     description: "bookmark_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      const [url, ...titleParts] = args;
-      if (!url) {
-        await bot.sendMessageWithFallback(
-          chatId,
-          await userMessage(bot, userId, "bookmark_usage"),
-        );
-        return;
-      }
-      try {
-        await bot.addBookmark(sessionKey, url, titleParts.join(" "));
-        await bot.sendMessageWithFallback(
-          chatId,
-          await userMessage(bot, userId, "bookmark_saved"),
-        );
-      } catch (error) {
-        await bot.sendMessageWithFallback(
-          chatId,
-          await userMessage(bot, userId, "bookmark_failed", {
-            error:
-              error instanceof Error
-                ? error.message
-                : await userMessage(bot, userId, "unknown_error"),
-          }),
-        );
-      }
-    },
-  },
-  {
-    name: "bookmarks",
-    description: "bookmarks_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-    ) => {
-      await bot.sendMessageWithFallback(
-        chatId,
-        (await bot.listBookmarks(sessionKey)) ||
-          (await userMessage(bot, userId, "no_bookmarks")),
-      );
-    },
-  },
-  {
-    name: "unbookmark",
-    description: "unbookmark_description",
-    action: async (
-      chatId: number,
-      sessionKey: string,
-      userId: string,
-      bot: TelegramBot,
-      args: string[],
-    ) => {
-      const removed = await bot.removeBookmark(sessionKey, args.join(" "));
-      await bot.sendMessageWithFallback(
-        chatId,
-        removed
-          ? await userMessage(bot, userId, "bookmark_removed", {
-              value: removed,
-            })
-          : await userMessage(bot, userId, "bookmark_not_found"),
-      );
-    },
+    action: dispatchSubcommand({
+      usage: "Usage: /bookmark <url> [title]\n/bookmark list\n/bookmark rm <id-or-title>",
+      // Bare `/bookmark <url>` stays the primary form.
+      fallback: async ({ chatId, sessionKey, userId, bot, args }) => {
+        const [url, ...titleParts] = args;
+        if (!url) {
+          await bot.sendMessageWithFallback(
+            chatId,
+            await userMessage(bot, userId, "bookmark_usage"),
+          );
+          return;
+        }
+        try {
+          await bot.addBookmark(sessionKey, url, titleParts.join(" "));
+          await bot.sendMessageWithFallback(
+            chatId,
+            await userMessage(bot, userId, "bookmark_saved"),
+          );
+        } catch (error) {
+          await bot.sendMessageWithFallback(
+            chatId,
+            await userMessage(bot, userId, "bookmark_failed", {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : await userMessage(bot, userId, "unknown_error"),
+            }),
+          );
+        }
+      },
+      subcommands: [
+        {
+          keywords: ["list", "ls"],
+          handler: async ({ chatId, sessionKey, userId, bot }) => {
+            await bot.sendMessageWithFallback(
+              chatId,
+              (await bot.listBookmarks(sessionKey)) ||
+                (await userMessage(bot, userId, "no_bookmarks")),
+            );
+          },
+        },
+        {
+          keywords: ["rm", "remove", "delete"],
+          handler: async ({ chatId, sessionKey, userId, bot, args }) => {
+            const removed = await bot.removeBookmark(sessionKey, args.join(" "));
+            await bot.sendMessageWithFallback(
+              chatId,
+              removed
+                ? await userMessage(bot, userId, "bookmark_removed", {
+                    value: removed,
+                  })
+                : await userMessage(bot, userId, "bookmark_not_found"),
+            );
+          },
+        },
+      ],
+    }),
   },
   {
     name: "setambient",

@@ -24,6 +24,7 @@ import {
   buildMenuScopePlans,
   MENU_SCHEMA_VERSION,
 } from "../../config/menu_scope";
+import { RETIRED_COMMAND_HINTS } from "../../config/commands/subcommand";
 import { isUserFacingError } from "../../utils/user_facing_error";
 import type { PromptFiles } from "@upstash/box";
 
@@ -337,10 +338,21 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
     const command = this.commands.find((cmd) => cmd.name === commandName);
     if (command) {
       await command.action(chatId, sessionKey, userId, this, args);
-    } else {
-      console.log(`Unknown command: ${commandName}`);
-      await this.sendMessage(chatId, translate("command_not_found"));
+      return;
     }
+    // One lookup, not fifteen alias handlers: consolidating was meant to shrink
+    // the surface, so a retired name explains itself here instead of living on
+    // as a registered command.
+    const replacement = RETIRED_COMMAND_HINTS[commandName];
+    if (replacement) {
+      await this.sendMessageWithFallback(
+        chatId,
+        `/${commandName} is now ${replacement}`,
+      );
+      return;
+    }
+    console.log(`Unknown command: ${commandName}`);
+    await this.sendMessage(chatId, translate("command_not_found"));
   }
 
   async sendMessage(
