@@ -178,7 +178,7 @@ export abstract class TelegramSchedulingBot extends TelegramChatExecutionBot {
     Array<{ provider: string; used: number; cap: number | null }>
   > {
     const month = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Kuala_Lumpur",
+      timeZone: this.config.defaultTimezone,
       year: "numeric",
       month: "2-digit",
     }).format(new Date());
@@ -214,7 +214,11 @@ export abstract class TelegramSchedulingBot extends TelegramChatExecutionBot {
     sessionKey: string,
     input: string,
   ): Promise<string> {
-    const parsed = parseReminderInput(input);
+    const parsed = parseReminderInput(
+      input,
+      new Date(),
+      this.config.defaultTimezone,
+    );
     if (parsed.dueAt <= Date.now())
       throw new Error(translateMessage("reminder_in_past"));
     const job: ScheduledJob = {
@@ -355,7 +359,11 @@ export abstract class TelegramSchedulingBot extends TelegramChatExecutionBot {
     sessionKey: string,
     input: string,
   ): Promise<string> {
-    const parsed = parseDigestInput(input);
+    const parsed = parseDigestInput(
+      input,
+      new Date(),
+      this.config.defaultTimezone,
+    );
     if (
       parsed.mode === "feeds" &&
       (await this.getFeedSubscriptions(sessionKey)).length === 0
@@ -728,11 +736,11 @@ export abstract class TelegramSchedulingBot extends TelegramChatExecutionBot {
   }
 
   protected formatScheduledTime(timestamp: number): string {
-    return new Intl.DateTimeFormat("en", {
-      timeZone: "Asia/Kuala_Lumpur",
+    return `${new Intl.DateTimeFormat("en", {
+      timeZone: this.config.defaultTimezone,
       dateStyle: "medium",
       timeStyle: "short",
-    }).format(new Date(timestamp));
+    }).format(new Date(timestamp))} (${this.config.defaultTimezone})`;
   }
 
   protected async processDigestJob(job: ScheduledJob): Promise<void> {

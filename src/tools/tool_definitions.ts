@@ -133,7 +133,7 @@ export const REMINDER_TOOL: ToolDefinition = {
   type: 'function',
   function: {
     name: 'manage_reminders',
-    description: 'Create, list, or cancel Telegram reminders for this chat. Times are interpreted in Asia/Kuala_Lumpur. Only mutate reminders when the user clearly requests it.',
+    description: "Create, list, or cancel Telegram reminders for this chat. Times are interpreted in the bot's configured timezone. Only mutate reminders when the user clearly requests it.",
     parameters: {
       type: 'object',
       properties: {

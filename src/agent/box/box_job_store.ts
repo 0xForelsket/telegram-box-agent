@@ -57,6 +57,11 @@ export interface BoxJob {
   approvalDeliveryLeaseId?: string;
   approvalDeliveryLeaseExpiresAt?: number;
   approvalCount?: number;
+  /** Telegram message edited in place with live progress, if one was sent. */
+  progressMessageId?: number;
+  progressHeader?: string;
+  progressText?: string;
+  progressUpdatedAt?: number;
 }
 
 export interface CreateBoxJobInput {
@@ -137,6 +142,53 @@ export class BoxJobStore {
     if (!job) return null;
     const supplied = await hashToken(normalizeToken(token, 'artifact session token'));
     return constantTimeEqual(job.artifactSessionTokenHash, supplied) ? job : null;
+  }
+
+  /**
+   * Records the message that live progress will be edited into.
+   *
+   * Written without a lock and without a status check: it only ever affects a
+   * cosmetic field, and blocking the acceptance path on the job lock would put
+   * a Redis round trip between the user and their acknowledgement.
+   */
+  async setProgressMessage(
+    id: string,
+    input: { messageId: number; header: string },
+  ): Promise<void> {
+    const job = await this.get(id);
+    if (!job) return;
+    // `progressUpdatedAt` is deliberately left unset: it is the throttle clock
+    // for real updates, and stamping it here would swallow the first one.
+    await this.save({
+      ...job,
+      progressMessageId: input.messageId,
+      progressHeader: input.header,
+    });
+  }
+
+  /**
+   * Stores the latest progress line if it is newer than `minIntervalMs`.
+   *
+   * Returns null when the update is dropped, which is the throttle: Box is the
+   * one deciding how often to report, and an agent in a tight tool loop must
+   * not be able to drive one Telegram edit per tool call.
+   */
+  async recordProgress(
+    id: string,
+    text: string,
+    now = Date.now(),
+    minIntervalMs = 4_000,
+  ): Promise<BoxJob | null> {
+    return await this.redis.withLock(`box-job:${id}`, async () => {
+      const job = await this.get(id);
+      if (!job || TERMINAL_STATUSES.has(job.status)) return null;
+      if (job.progressUpdatedAt && now - job.progressUpdatedAt < minIntervalMs) return null;
+      const normalized = text.replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (!normalized || normalized === job.progressText) return null;
+      const updated = { ...job, progressText: normalized, progressUpdatedAt: now };
+      await this.save(updated);
+      return updated;
+    });
   }
 
   async setArtifactIds(id: string, artifactIds: string[], now = Date.now()): Promise<BoxJob> {

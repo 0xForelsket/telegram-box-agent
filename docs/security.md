@@ -96,9 +96,31 @@ shell classifier. Consequently:
 - no permanent third-party integration credentials are supplied to Box;
 - group-member execution is disabled by default;
 - deployments, payments, and other high-impact operations should be completed
-  outside Box;
-- a future action broker should mint short-lived, action-scoped authority only
-  after owner approval and enforce the allowed operation server-side.
+  outside Box.
+
+### Action broker
+
+For the external writes it covers, the broker replaces classification with
+mediation. A Box job cannot perform the write at all; it can only request a
+named action from `src/agent/box/action_catalog.ts` with structured parameters.
+The Worker validates them, checks the repository allowlist, shows the owner the
+exact effect, and — only after a matching one-time approval — performs the
+operation itself using a credential the sandbox never receives.
+
+The executor reads its parameters from the stored record, not from anything the
+Box sends at execution time, and re-derives the approved fingerprint before
+running. What the owner saw is therefore what executes. A fully compromised Box
+can request an action or decline to; it cannot widen, alter, or repeat one.
+
+Both `ACTION_BROKER_ENABLED=true` and a non-empty `ACTION_BROKER_GITHUB_REPOS`
+are required. An empty allowlist permits nothing: a broker whose scope defaulted
+to "anywhere" would be worse than no broker, because it would look like a
+boundary.
+
+Limits worth stating: the broker only covers actions in the catalog. Anything
+outside it still falls back to the shell classifier and its documented
+weaknesses, and adding a loosely-typed action — one taking a raw URL, command,
+or arbitrary request body — would reintroduce exactly the gap this closes.
 
 ## Operational requirements
 

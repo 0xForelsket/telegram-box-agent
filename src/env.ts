@@ -17,6 +17,7 @@ export interface Env {
   WHITELISTED_GROUPS?: string;
   OWNER_USER_ID?: string;
   AMBIENT_MEMORY_DEFAULT?: string;
+  DEFAULT_TIMEZONE?: string;
   SYSTEM_INIT_MESSAGE: string;
   SYSTEM_INIT_MESSAGE_ROLE: string;
   DEFAULT_MODEL?: string;
@@ -61,6 +62,8 @@ export interface Env {
   MAX_VOICE_FILE_BYTES?: string;
   BOX_AGENT_ENABLED?: string;
   BOX_ALLOW_GROUP_MEMBERS?: string;
+  ACTION_BROKER_ENABLED?: string;
+  ACTION_BROKER_GITHUB_REPOS?: string;
   UPSTASH_BOX_API_KEY?: string;
   UPSTASH_BOX_BASE_URL?: string;
   BOX_SNAPSHOT_ID?: string;
@@ -94,6 +97,7 @@ interface AppConfig {
   whitelistedGroups: string[];
   ownerUserId?: string;
   ambientMemoryDefault: boolean;
+  defaultTimezone: string;
   systemInitMessage: string;
   systemInitMessageRole: string;
   defaultModel?: string;
@@ -140,6 +144,8 @@ interface AppConfig {
   maxVoiceFileBytes: number;
   boxAgentEnabled: boolean;
   boxAllowGroupMembers: boolean;
+  actionBrokerEnabled: boolean;
+  actionBrokerGithubRepos: string[];
   upstashBoxApiKey?: string;
   upstashBoxBaseUrl?: string;
   boxSnapshotId?: string;
@@ -204,6 +210,7 @@ export const getConfig = (env: Env): AppConfig => {
       : [],
     ownerUserId,
     ambientMemoryDefault: getEnvOrDefault(env, 'AMBIENT_MEMORY_DEFAULT', 'false') === 'true',
+    defaultTimezone: resolveTimezone(env.DEFAULT_TIMEZONE),
     systemInitMessage: getEnvOrDefault(env, 'SYSTEM_INIT_MESSAGE', 'You are a helpful assistant.'),
     systemInitMessageRole: getEnvOrDefault(env, 'SYSTEM_INIT_MESSAGE_ROLE', 'system'),
     defaultModel: env.DEFAULT_MODEL,
@@ -254,6 +261,12 @@ export const getConfig = (env: Env): AppConfig => {
     maxVoiceFileBytes: parsePositiveInt(env.MAX_VOICE_FILE_BYTES, 10 * 1024 * 1024),
     boxAgentEnabled,
     boxAllowGroupMembers: getEnvOrDefault(env, 'BOX_ALLOW_GROUP_MEMBERS', 'false') === 'true',
+    actionBrokerEnabled: getEnvOrDefault(env, 'ACTION_BROKER_ENABLED', 'false') === 'true',
+    // An empty allowlist permits nothing. The broker is only a boundary if its
+    // scope is stated, so scope is never inferred.
+    actionBrokerGithubRepos: env.ACTION_BROKER_GITHUB_REPOS
+      ? env.ACTION_BROKER_GITHUB_REPOS.split(',').map(repo => repo.trim()).filter(Boolean)
+      : [],
     upstashBoxApiKey: env.UPSTASH_BOX_API_KEY?.trim() || undefined,
     upstashBoxBaseUrl: env.UPSTASH_BOX_BASE_URL?.trim().replace(/\/+$/, '') || undefined,
     boxSnapshotId: env.BOX_SNAPSHOT_ID?.trim() || undefined,
@@ -268,6 +281,25 @@ export const getConfig = (env: Env): AppConfig => {
     boxDeepseekOutputUsdPerMTokens: parsePositiveNumber(env.BOX_DEEPSEEK_OUTPUT_USD_PER_MTOKENS, 0.28),
   };
 };
+
+/**
+ * Reminder times, digest schedules, and the Box daily-quota day boundary were
+ * all hardcoded to Asia/Kuala_Lumpur, which silently reinterpreted every
+ * self-hosted deployment's `09:00` as Malaysian time. An unusable zone falls
+ * back to UTC rather than throwing, because a bad timezone should not take a
+ * whole bot offline.
+ */
+function resolveTimezone(value: string | undefined): string {
+  const timezone = value?.trim();
+  if (!timezone) return 'UTC';
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch {
+    console.error(`DEFAULT_TIMEZONE "${timezone}" is not a recognised IANA zone; falling back to UTC.`);
+    return 'UTC';
+  }
+}
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = value ? Number.parseInt(value, 10) : fallback;

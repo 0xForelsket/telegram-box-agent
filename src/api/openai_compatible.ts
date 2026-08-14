@@ -2,6 +2,7 @@ import { Env, getConfig } from '../env';
 import { ModelAPIInterface, ModelResponse } from './model_api_interface';
 import { ChatCompletionResponse, Message, ToolChoice, ToolDefinition } from './chat_types';
 import { fetchJson, getFirstChoiceContent } from '../utils/helpers';
+import { inlineImage } from './image_payload';
 import { streamOpenAIChatCompletion } from './openai_chat_stream';
 
 const MAX_ANALYSIS_TOKENS = 300;
@@ -153,6 +154,10 @@ class OpenAICompatibleAPI implements ModelAPIInterface {
 
   async analyzeImage(imageUrl: string, prompt: string, model: string): Promise<string> {
     this.requireConfigured();
+    // Inlined rather than passed by reference: the configured base URL is an
+    // arbitrary third party, and a URL it fetches for us is a URL it sees. A
+    // Telegram file URL carries the bot token in its path.
+    const image = await inlineImage(imageUrl, this.fetchImpl ?? fetch);
     const data = await fetchJson<ChatCompletionResponse>(
       this.getEndpoint('/chat/completions'),
       {
@@ -167,7 +172,7 @@ class OpenAICompatibleAPI implements ModelAPIInterface {
             role: 'user',
             content: [
               { type: 'text', text: prompt },
-              { type: 'image_url', image_url: { url: imageUrl } },
+              { type: 'image_url', image_url: { url: image.dataUrl } },
             ],
           }],
           max_tokens: MAX_ANALYSIS_TOKENS,

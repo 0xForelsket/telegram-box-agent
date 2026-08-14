@@ -109,6 +109,10 @@ export interface TelegramCommandBot {
   createBoxAgentSchedule(chatId: number, userId: string, cron: string, prompt: string, requestedRoute?: string): Promise<string>;
   listBoxAgentSchedules(chatId: number, userId: string): Promise<string>;
   changeBoxAgentSchedule(chatId: number, userId: string, id: string, action: 'pause' | 'resume' | 'delete'): Promise<string>;
+  listArtifacts(chatId: number, userId: string): Promise<string>;
+  listBrokeredActions(chatId: number, userId: string): Promise<string>;
+  approveBrokeredAction(chatId: number, userId: string, actionId: string, nonce: string): Promise<string>;
+  denyBrokeredAction(chatId: number, userId: string, actionId: string): Promise<string>;
   getArtifactLink(chatId: number, userId: string, artifactId: string): Promise<string>;
 }
 

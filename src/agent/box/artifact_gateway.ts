@@ -1,6 +1,6 @@
 import type { Env } from '../../env';
 import type { RedisClient } from '../../utils/redis';
-import { ArtifactStore, type BoxArtifact } from './artifact_store';
+import { ARTIFACT_RETENTION_DAYS, ArtifactStore, type BoxArtifact } from './artifact_store';
 import { BoxJobStore } from './box_job_store';
 
 export const TELEGRAM_DOCUMENT_LIMIT_BYTES = 50 * 1024 * 1024;
@@ -200,6 +200,32 @@ export class ArtifactGateway {
       throw new Error('Artifact no longer exists.');
     }
     return { artifact, url: await this.createDownloadUrl(artifact) };
+  }
+
+  /**
+   * Uploaded artifacts visible to a caller, with the days each has left before
+   * the R2 lifecycle rule removes it. Presence in Redis is not proof the object
+   * still exists, so the caller is told this is the record's view.
+   */
+  async listForUser(input: {
+    chatId: number;
+    userId: string;
+    owner: boolean;
+    limit?: number;
+  }): Promise<Array<{ artifact: BoxArtifact; retentionDaysLeft: number }>> {
+    const artifacts = await this.store.listForChat(input.chatId, input.limit ?? 25);
+    const now = this.now();
+    return artifacts
+      .filter(artifact => artifact.status === 'uploaded')
+      .filter(artifact => input.owner || artifact.userId === input.userId)
+      .map(artifact => {
+        const storedAt = artifact.uploadedAt ?? artifact.createdAt;
+        const elapsedDays = (now - storedAt) / (24 * 60 * 60_000);
+        return {
+          artifact,
+          retentionDaysLeft: Math.max(0, Math.ceil(ARTIFACT_RETENTION_DAYS - elapsedDays)),
+        };
+      });
   }
 
   private async signDownload(artifactId: string, expiresAt: number): Promise<string> {

@@ -7,21 +7,52 @@ import { BoxJobStore, type BoxJob } from './box_job_store';
 import { resolvePiModelRoute } from './pi_runtime';
 import { ArtifactGateway, TELEGRAM_DOCUMENT_LIMIT_BYTES } from './artifact_gateway';
 import { isGlmCodingTask } from './hybrid_router';
+import { ActionBroker } from './action_broker';
+import { UserFacingError } from '../../utils/user_facing_error';
+import { localDayKey, secondsUntilLocalMidnight } from '../../utils/timezone';
 import type { PromptFiles } from '@upstash/box';
 
 const BOUND_CHAT_KEY = 'box_config:v1:bound_chat_id';
 const ACTIVE_STATUSES = new Set(['queued', 'provisioning', 'running', 'awaiting_approval']);
-const MAX_GROUP_CONCURRENCY = 2;
-const MAX_DAILY_USER_STARTS = 5;
+export const MAX_GROUP_CONCURRENCY = 2;
+export const MAX_DAILY_USER_STARTS = 5;
+
+/**
+ * A request was refused before any Box work started: policy, quota,
+ * concurrency, configuration, or route restriction.
+ *
+ * Auto-routed requests use this to fall back to the ordinary chat path. A
+ * heuristic router will misfire, and a misfire must not cost the user their
+ * answer — an explicit `/agent` still surfaces the refusal.
+ */
+export class BoxAdmissionError extends UserFacingError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BoxAdmissionError';
+  }
+}
+
+export function isBoxAdmissionError(error: unknown): error is BoxAdmissionError {
+  return error instanceof Error && error.name === 'BoxAdmissionError';
+}
 
 type LaunchJob = (input: LaunchPiBoxJobInput) => Promise<LaunchedPiBoxJob>;
 type SendMessage = (chatId: number, text: string) => Promise<unknown>;
+type EditMessage = (chatId: number, messageId: number, text: string) => Promise<unknown>;
 type DeleteBox = (boxId: string, apiKey: string, baseUrl?: string) => Promise<void>;
 type SendDocument = (chatId: number, documentUrl: string, filename: string, caption: string) => Promise<void>;
 type ResumeJob = typeof resumeApprovedPiBoxJob;
 
+export interface BoxQuotaState {
+  dailyStartsUsed: number;
+  dailyStartsLimit: number;
+  activeJobs: number;
+  concurrencyLimit: number;
+}
+
 export interface QueuedBoxJob {
   job: BoxJob;
+  quota: BoxQuotaState;
   provision: () => Promise<void>;
 }
 
@@ -29,6 +60,7 @@ export interface BoxJobServiceDependencies {
   store?: BoxJobStore;
   launchJob?: LaunchJob;
   sendMessage?: SendMessage;
+  editMessage?: EditMessage;
   deleteBox?: DeleteBox;
   now?: () => number;
   artifacts?: ArtifactGateway;
@@ -41,6 +73,7 @@ export class BoxJobService {
   private readonly store: BoxJobStore;
   private readonly launchJob: LaunchJob;
   private readonly sendMessage: SendMessage;
+  private readonly editMessage: EditMessage;
   private readonly deleteBox: DeleteBox;
   private readonly now: () => number;
   private readonly artifacts: ArtifactGateway;
@@ -56,6 +89,7 @@ export class BoxJobService {
     this.store = dependencies.store ?? new BoxJobStore(redis);
     this.launchJob = dependencies.launchJob ?? launchPiBoxJob;
     this.sendMessage = dependencies.sendMessage ?? (async () => undefined);
+    this.editMessage = dependencies.editMessage ?? (async () => undefined);
     this.deleteBox = dependencies.deleteBox ?? (async (boxId, apiKey, baseUrl) => {
       await Box.delete({ boxIds: boxId, apiKey, baseUrl });
     });
@@ -111,16 +145,16 @@ export class BoxJobService {
     files?: PromptFiles;
   }): Promise<QueuedBoxJob> {
     if (!this.config.boxAgentEnabled) {
-      throw new Error('Box agent execution is disabled. Set BOX_AGENT_ENABLED=true after deployment checks pass.');
+      throw new BoxAdmissionError('Box agent execution is disabled. Set BOX_AGENT_ENABLED=true after deployment checks pass.');
     }
     this.requireRuntimeConfiguration();
     const boundChatId = await this.getBoundChatId();
-    if (boundChatId === null) throw new Error('Box is not bound to a Telegram group. The owner must run /box enable there first.');
+    if (boundChatId === null) throw new BoxAdmissionError('Box is not bound to a Telegram group. The owner must run /box enable there first.');
     if (input.chatId !== boundChatId || !input.sessionKey.startsWith('group:')) {
-      throw new Error('Box agent jobs can only be started from the bound Telegram group.');
+      throw new BoxAdmissionError('Box agent jobs can only be started from the bound Telegram group.');
     }
     if (!this.config.boxAllowGroupMembers && input.userId !== this.config.ownerUserId) {
-      throw new Error('Box jobs are owner-only. Set BOX_ALLOW_GROUP_MEMBERS=true only when every group member is trusted.');
+      throw new BoxAdmissionError('Box jobs are owner-only. Set BOX_ALLOW_GROUP_MEMBERS=true only when every group member is trusted.');
     }
 
     const route = resolvePiModelRoute({
@@ -136,22 +170,28 @@ export class BoxJobService {
       },
     });
     if (route.route === 'glm' && !isGlmCodingTask(input.request)) {
-      throw new Error('The GLM Coding Plan route is restricted to owner coding-agent tasks. Use DeepSeek for general work.');
+      throw new BoxAdmissionError('The GLM Coding Plan route is restricted to owner coding-agent tasks. Use DeepSeek for general work.');
     }
     const callbackNonce = crypto.randomUUID();
     const artifactSessionToken = crypto.randomUUID().replace(/-/g, '');
     const approvalNonce = crypto.randomUUID().replace(/-/g, '');
     const now = this.now();
-    const job = await this.redis.withLock(`box-admission:${input.chatId}`, async () => {
+    const admitted = await this.redis.withLock(`box-admission:${input.chatId}`, async () => {
       const active = (await this.store.listForChat(input.chatId, 50))
         .filter(candidate => ACTIVE_STATUSES.has(candidate.status));
       if (active.length >= MAX_GROUP_CONCURRENCY) {
-        throw new Error(`The bound group already has ${MAX_GROUP_CONCURRENCY} active Box jobs.`);
+        throw new BoxAdmissionError(
+          `The bound group already has ${MAX_GROUP_CONCURRENCY} active Box jobs. `
+          + `Wait for one to finish, or cancel one with /agent cancel <job-id>.`,
+        );
       }
       const quotaKey = this.quotaKey(input.userId, now);
       const used = Number.parseInt(await this.redis.get(quotaKey) ?? '0', 10) || 0;
       if (used >= MAX_DAILY_USER_STARTS) {
-        throw new Error(`You have reached the daily limit of ${MAX_DAILY_USER_STARTS} Box jobs.`);
+        throw new BoxAdmissionError(
+          `You have reached the daily limit of ${MAX_DAILY_USER_STARTS} Box jobs. `
+          + `It resets at midnight ${this.config.defaultTimezone}.`,
+        );
       }
       const created = await this.store.create({
         chatId: input.chatId,
@@ -165,15 +205,45 @@ export class BoxJobService {
         approvalNonce,
         now,
       });
-      await this.redis.set(quotaKey, String(used + 1), secondsUntilKualaLumpurMidnight(now));
-      return created;
+      await this.redis.set(quotaKey, String(used + 1), this.secondsUntilLocalMidnight(now));
+      return {
+        job: created,
+        quota: {
+          dailyStartsUsed: used + 1,
+          dailyStartsLimit: MAX_DAILY_USER_STARTS,
+          activeJobs: active.length + 1,
+          concurrencyLimit: MAX_GROUP_CONCURRENCY,
+        },
+      };
     });
 
+    const { job, quota } = admitted;
     return {
       job,
+      quota,
       provision: async () => {
         await this.provision(job, callbackNonce, artifactSessionToken, approvalNonce, route, input.files);
       },
+    };
+  }
+
+  /** Binds live progress updates to the message that acknowledged the job. */
+  async attachProgressMessage(jobId: string, messageId: number, header: string): Promise<void> {
+    await this.store.setProgressMessage(jobId, { messageId, header });
+  }
+
+  /** Remaining daily starts and group concurrency headroom, for status views. */
+  async getQuotaState(chatId: number, userId: string): Promise<BoxQuotaState> {
+    const now = this.now();
+    const [activeJobs, usedRaw] = await Promise.all([
+      this.store.listForChat(chatId, 50).then(jobs => jobs.filter(job => ACTIVE_STATUSES.has(job.status)).length),
+      this.redis.get(this.quotaKey(userId, now)),
+    ]);
+    return {
+      dailyStartsUsed: Number.parseInt(usedRaw ?? '0', 10) || 0,
+      dailyStartsLimit: MAX_DAILY_USER_STARTS,
+      activeJobs,
+      concurrencyLimit: MAX_GROUP_CONCURRENCY,
     };
   }
 
@@ -233,6 +303,59 @@ export class BoxJobService {
     }
   }
 
+  /**
+   * Live progress from a running Box.
+   *
+   * A Box job can run for many minutes with nothing between "queued" and the
+   * final result, which is indistinguishable from the bot having dropped the
+   * request. The Box authenticates with its own job-scoped session token — the
+   * same authority it already holds for artifact uploads — and the Worker
+   * decides whether the update is frequent enough to be worth an edit.
+   *
+   * Failure here is never fatal: progress is cosmetic, and a job must not fail
+   * because a status line could not be delivered.
+   */
+  async handleProgress(request: Request): Promise<Response> {
+    if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
+    const jobId = request.headers.get('X-Box-Job-Id')?.trim().toLowerCase() ?? '';
+    const sessionToken = bearer(request.headers);
+    if (!jobId || !sessionToken) return json({ error: 'Missing progress credentials.' }, 401);
+
+    let job: BoxJob | null;
+    try {
+      job = await this.store.verifyArtifactSession(jobId, sessionToken);
+    } catch {
+      return json({ error: 'Invalid progress credentials.' }, 401);
+    }
+    if (!job) return json({ error: 'Invalid progress credentials.' }, 401);
+
+    let text: string;
+    try {
+      const body = await request.json() as { step?: unknown };
+      if (typeof body.step !== 'string' || !body.step.trim()) throw new Error('Progress step is required.');
+      text = body.step;
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : 'Invalid progress payload.' }, 400);
+    }
+
+    const updated = await this.store.recordProgress(jobId, text, this.now());
+    if (!updated) return json({ ok: true, throttled: true });
+    await this.publishProgress(updated).catch(error => {
+      console.error(`Box progress delivery failed for ${jobId}:`, error);
+    });
+    return json({ ok: true });
+  }
+
+  private async publishProgress(job: BoxJob): Promise<void> {
+    if (!job.progressMessageId || !job.progressText) return;
+    const header = job.progressHeader ?? `Box job ${job.id} (${job.route}, ${job.model}).`;
+    await this.editMessage(
+      job.chatId,
+      job.progressMessageId,
+      `${header}\n\nWorking: ${job.progressText}`,
+    );
+  }
+
   async handleCompletion(request: Request): Promise<Response> {
     if (request.method !== 'POST') return json({ error: 'Method not allowed.' }, 405);
     const jobId = request.headers.get('X-Box-Job-Id')?.trim().toLowerCase() ?? '';
@@ -286,6 +409,7 @@ export class BoxJobService {
     route: ReturnType<typeof resolvePiModelRoute>,
     files?: PromptFiles,
   ): Promise<void> {
+    const actionBroker = new ActionBroker(this.env, this.redis, { jobs: this.store, now: this.now });
     try {
       await this.store.markProvisioning(job.id, this.now());
       const webhook = await createBoxCallbackAuthorization({
@@ -310,6 +434,18 @@ export class BoxJobService {
           authorizeUrl: `${new URL(this.config.boxCallbackUrl!).origin}/box/artifacts/authorize`,
           token: artifactSessionToken,
         } : undefined,
+        progressSession: {
+          url: `${new URL(this.config.boxCallbackUrl!).origin}/box/progress`,
+          token: artifactSessionToken,
+        },
+        actionSession: actionBroker.isEnabled() && actionBroker.availableActions().length > 0
+          ? {
+              requestUrl: `${new URL(this.config.boxCallbackUrl!).origin}/box/actions/request`,
+              resultUrl: `${new URL(this.config.boxCallbackUrl!).origin}/box/actions/result`,
+              token: artifactSessionToken,
+              availableActions: actionBroker.availableActions(),
+            }
+          : undefined,
       });
       const running = await this.store.markRunning(job.id, launched.boxId, launched.runId, this.now());
       if (!ACTIVE_STATUSES.has(running.status)) await this.cleanup(running);
@@ -397,10 +533,11 @@ export class BoxJobService {
   }
 
   private quotaKey(userId: string, now: number): string {
-    const day = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit',
-    }).format(new Date(now));
-    return `box_quota:v1:user:${userId}:${day}`;
+    return `box_quota:v1:user:${userId}:${localDayKey(this.config.defaultTimezone, now)}`;
+  }
+
+  private secondsUntilLocalMidnight(now: number): number {
+    return secondsUntilLocalMidnight(this.config.defaultTimezone, now);
   }
 }
 
@@ -428,19 +565,17 @@ function formatApprovalMessage(job: BoxJob, nonce?: string): string {
   return `Box job ${job.id} paused for owner approval.\nCategory: ${pending.category}\nAction: ${pending.action.slice(0, 1200)}\n\nApprove within 15 minutes with:\n/agent approve ${job.id} ${nonce ?? '<nonce unavailable>'}`;
 }
 
-function secondsUntilKualaLumpurMidnight(now: number): number {
-  const offsetMs = 8 * 60 * 60_000;
-  const local = new Date(now + offsetMs);
-  const nextUtc = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() + 1) - offsetMs;
-  return Math.max(60, Math.ceil((nextUtc - now) / 1000));
-}
-
 function safeError(error: unknown, fallback: string): string {
   return (error instanceof Error ? error.message : fallback).trim().slice(0, 4_000) || fallback;
 }
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
+}
+
+function bearer(headers: Headers): string {
+  const value = headers.get('Authorization') ?? '';
+  return value.startsWith('Bearer ') ? value.slice(7).trim() : '';
 }
 
 function formatBytes(value: number): string {

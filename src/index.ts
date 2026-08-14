@@ -25,6 +25,18 @@ export default {
         return await bot.handleBoxScheduleCompletion(request);
       }
 
+      if (url.pathname === '/box/progress') {
+        return await bot.handleBoxProgress(request);
+      }
+
+      if (url.pathname === '/box/actions/request') {
+        return await bot.handleBoxActionRequest(request);
+      }
+
+      if (url.pathname === '/box/actions/result') {
+        return await bot.handleBoxActionResult(request);
+      }
+
       if (url.pathname === '/box/artifacts/authorize') {
         return await bot.handleBoxArtifactAuthorization(request);
       }

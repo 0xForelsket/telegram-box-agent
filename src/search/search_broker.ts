@@ -24,6 +24,9 @@ export class SearchBroker {
     private readonly redis: RedisClient,
     private readonly onAttempt?: (event: SearchAttemptEvent) => void,
     private readonly providerMonthlyCaps: Record<string, number> = {},
+    // The month a quota rolls over in has to match the one `/status` reports,
+    // so both read the deployment's configured zone rather than a fixed one.
+    private readonly timezone: string = 'UTC',
   ) {}
 
   isConfigured(): boolean {
@@ -120,7 +123,7 @@ export class SearchBroker {
 
   private getCurrentMonth(): string {
     return new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Kuala_Lumpur',
+      timeZone: this.timezone,
       year: 'numeric',
       month: '2-digit',
     }).format(new Date());

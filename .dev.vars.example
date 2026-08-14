@@ -12,6 +12,11 @@ OWNER_USER_ID=replace-with-your-numeric-telegram-user-id
 WHITELISTED_USERS=replace-with-comma-separated-numeric-telegram-user-ids
 WHITELISTED_GROUPS=
 
+# IANA timezone for reminder times, digest schedules, daily quota resets, and
+# the date given to the model. Defaults to UTC; an unrecognised zone falls back
+# to UTC with a logged warning rather than failing startup.
+DEFAULT_TIMEZONE=UTC
+
 # Upstash Redis REST
 UPSTASH_REDIS_REST_URL=https://replace-me.upstash.io
 UPSTASH_REDIS_REST_TOKEN=replace-me
@@ -52,6 +57,13 @@ QSTASH_NEXT_SIGNING_KEY=
 BOX_AGENT_ENABLED=false
 # Secure public default. Enable only when every member of the bound group is trusted.
 BOX_ALLOW_GROUP_MEMBERS=false
+
+# Action broker. Lets a Box job request an allowlisted external write that the
+# Worker performs itself after owner approval; the sandbox never receives the
+# credential. Both values are required — an empty repository allowlist permits
+# nothing, so enabling the broker alone grants no new authority.
+ACTION_BROKER_ENABLED=false
+ACTION_BROKER_GITHUB_REPOS=
 
 # Update these when provider pricing changes. Startup validation fails closed if
 # the configured worst-case DeepSeek cost can exceed the per-job ceiling.

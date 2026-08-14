@@ -85,7 +85,7 @@ export const utilitiesCommands: Command[] = [
       args: string[],
     ) => {
       try {
-        const timeZone = args[0] || "Asia/Kuala_Lumpur";
+        const timeZone = args[0] || bot.getEnv().DEFAULT_TIMEZONE?.trim() || "UTC";
         await bot.sendMessageWithFallback(
           chatId,
           `${timeZone}: ${formatTimeInZone(timeZone)}`,

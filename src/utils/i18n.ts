@@ -89,7 +89,8 @@ const uiStrings = {
   agent_description: "🧰 Run or manage a sandboxed Box agent job",
   quick_description: "⚡ Force a normal non-Box chatbot reply",
   box_description: "📦 Configure the Upstash Box agent runtime",
-  artifact_description: "📎 Refresh a private artifact download link",
+  action_description: "🔐 Review, approve, or deny brokered external writes",
+  artifact_description: "📎 List stored artifacts or refresh a download link",
 } as const;
 
 export type TranslationKey = keyof typeof uiStrings;

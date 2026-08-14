@@ -366,3 +366,41 @@ describe('ArtifactStore.get', () => {
     await expect(store.get('../../etc/passwd')).rejects.toThrow('Invalid artifact ID');
   });
 });
+
+describe('ArtifactStore.listForChat', () => {
+  it('returns a chat\'s artifacts newest first', async () => {
+    const { store } = createStore();
+
+    const older = await createArtifact(store, { now: 1_000, filename: 'first.pdf' });
+    const newer = await createArtifact(store, { now: 5_000, filename: 'second.pdf' });
+
+    const listed = await store.listForChat(-100123);
+
+    expect(listed.map(artifact => artifact.id)).toEqual([newer.id, older.id]);
+  });
+
+  // The index is per chat, but the record carries the authoritative chat ID:
+  // a mismatched record must never surface in another chat's listing.
+  it('excludes an artifact belonging to a different chat', async () => {
+    const { store } = createStore();
+
+    await createArtifact(store, { chatId: -100999, filename: 'other.pdf' });
+
+    expect(await store.listForChat(-100123)).toEqual([]);
+  });
+
+  it('honours the requested limit', async () => {
+    const { store } = createStore();
+    for (let index = 0; index < 5; index++) {
+      await createArtifact(store, { now: 1_000 + index, filename: `f${index}.pdf` });
+    }
+
+    expect(await store.listForChat(-100123, 2)).toHaveLength(2);
+  });
+
+  it('is empty for a chat that has never produced an artifact', async () => {
+    const { store } = createStore();
+
+    expect(await store.listForChat(-100555)).toEqual([]);
+  });
+});

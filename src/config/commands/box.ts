@@ -212,22 +212,84 @@ export const boxCommands: Command[] = [
       bot: TelegramBot,
       args: string[],
     ) => {
-      if (!args[0]) {
+      const target = (args[0] || "").trim();
+      if (!target) {
         await bot.sendMessageWithFallback(
           chatId,
-          "Usage: /artifact <artifact-id>",
+          "Usage: /artifact <artifact-id>\n/artifact list",
         );
         return;
       }
       try {
         await bot.sendMessageWithFallback(
           chatId,
-          await bot.getArtifactLink(chatId, userId, args[0]),
+          target.toLowerCase() === "list"
+            ? await bot.listArtifacts(chatId, userId)
+            : await bot.getArtifactLink(chatId, userId, target),
         );
       } catch (error) {
         await bot.sendMessageWithFallback(
           chatId,
           error instanceof Error ? error.message : "Artifact lookup failed.",
+        );
+      }
+    },
+  },
+  {
+    name: "action",
+    description: "action_description",
+    action: async (
+      chatId: number,
+      sessionKey: string,
+      userId: string,
+      bot: TelegramBot,
+      args: string[],
+    ) => {
+      const operation = (args[0] || "list").toLowerCase();
+      try {
+        if (operation === "list") {
+          await bot.sendMessageWithFallback(
+            chatId,
+            await bot.listBrokeredActions(chatId, userId),
+          );
+          return;
+        }
+        if (operation === "approve") {
+          if (!args[1] || !args[2]) {
+            await bot.sendMessageWithFallback(
+              chatId,
+              "Usage: /action approve <action-id> <nonce>",
+            );
+            return;
+          }
+          await bot.sendMessageWithFallback(
+            chatId,
+            await bot.approveBrokeredAction(chatId, userId, args[1], args[2]),
+          );
+          return;
+        }
+        if (operation === "deny") {
+          if (!args[1]) {
+            await bot.sendMessageWithFallback(
+              chatId,
+              "Usage: /action deny <action-id>",
+            );
+            return;
+          }
+          await bot.sendMessageWithFallback(
+            chatId,
+            await bot.denyBrokeredAction(chatId, userId, args[1]),
+          );
+          return;
+        }
+        await bot.sendMessageWithFallback(
+          chatId,
+          "Usage: /action list\n/action approve <action-id> <nonce>\n/action deny <action-id>",
+        );
+      } catch (error) {
+        await bot.sendMessageWithFallback(
+          chatId,
+          error instanceof Error ? error.message : "Action request failed.",
         );
       }
     },

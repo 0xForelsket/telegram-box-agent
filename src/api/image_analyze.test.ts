@@ -57,21 +57,52 @@ describe('ImageAnalysisAPI routing', () => {
     const api = new ImageAnalysisAPI(undefined, { config: CONFIG, fetchImpl, openaiCompatible: compatible() });
 
     expect(await api.analyzeImage(IMAGE_URL, 'what is this?', 'gpt-vision')).toBe('a bicycle');
-    expect(calls(fetchImpl)[0][0]).toBe('https://openai.example/v1/chat/completions');
+    expect(calls(fetchImpl).map(([url]) => String(url)))
+      .toEqual([IMAGE_URL, 'https://openai.example/v1/chat/completions']);
   });
 
-  it('sends the image to OpenAI by reference rather than downloading it', async () => {
-    const fetchImpl = visionFetch(OPENAI_OK);
+  it('inlines the image for OpenAI instead of sending the source URL', async () => {
+    const fetchImpl = visionFetch(OPENAI_OK, new Uint8Array([104, 105]));
     const api = new ImageAnalysisAPI(undefined, { config: CONFIG, fetchImpl, openaiCompatible: compatible() });
 
     await api.analyzeImage(IMAGE_URL, 'what is this?', 'gpt-vision');
 
-    expect(calls(fetchImpl)).toHaveLength(1);
-    const body = JSON.parse(calls(fetchImpl)[0][1].body as string);
+    const openaiCall = calls(fetchImpl).find(([url]) => String(url).includes('openai.example'))!;
+    const body = JSON.parse(openaiCall[1].body as string);
     expect(body.messages[0].content).toEqual([
       { type: 'text', text: 'what is this?' },
-      { type: 'image_url', image_url: { url: IMAGE_URL } },
+      { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,aGk=' } },
     ]);
+  });
+
+  // A Telegram file URL is `/file/bot<TELEGRAM_BOT_TOKEN>/...`. Passing it by
+  // reference makes the provider fetch it, disclosing full control of the bot.
+  it('never puts a credentialed source URL in a provider request', async () => {
+    const telegramUrl = 'https://api.telegram.org/file/bot123456:SECRET-BOT-TOKEN/photos/a.jpg';
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === telegramUrl) {
+        return new Response(new Uint8Array([104, 105]), { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+      }
+      return new Response(JSON.stringify(OPENAI_OK), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = new ImageAnalysisAPI(undefined, { config: CONFIG, fetchImpl, openaiCompatible: compatible() });
+
+    await api.analyzeImage(telegramUrl, 'what is this?', 'gpt-vision');
+
+    const outbound = calls(fetchImpl).filter(([url]) => String(url).includes('openai.example'));
+    expect(outbound).toHaveLength(1);
+    expect(JSON.stringify(outbound[0])).not.toContain('SECRET-BOT-TOKEN');
+  });
+
+  it('reuses an already-inlined data URL without re-fetching it', async () => {
+    const fetchImpl = visionFetch(OPENAI_OK);
+    const api = new ImageAnalysisAPI(undefined, { config: CONFIG, fetchImpl, openaiCompatible: compatible() });
+
+    await api.analyzeImage('data:image/png;base64,aGk=', 'x', 'gpt-vision');
+
+    expect(calls(fetchImpl)).toHaveLength(1);
+    const body = JSON.parse(calls(fetchImpl)[0][1].body as string);
+    expect(body.messages[0].content[1].image_url.url).toBe('data:image/png;base64,aGk=');
   });
 
   it('rejects a model none of the providers recognise', async () => {

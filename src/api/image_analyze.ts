@@ -3,8 +3,8 @@ import { ModelAPIInterface } from './model_api_interface';
 import { ChatCompletionResponse, Message } from './chat_types';
 import OpenAICompatibleAPI from './openai_compatible';
 import { fetchJson, getFirstChoiceContent } from '../utils/helpers';
+import { inlineImage } from './image_payload';
 
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_ANALYSIS_TOKENS = 300;
 
 interface GeminiImageAnalysisResponse {
@@ -65,11 +65,14 @@ class ImageAnalysisAPI implements ModelAPIInterface {
   }
 
   private async analyzeWithOpenAI(imageUrl: string, prompt: string, model: string): Promise<string> {
+    // Inlined rather than passed by reference: a URL handed to OpenAI is
+    // fetched by OpenAI, which would disclose a Telegram file URL's bot token.
+    const image = await this.fetchImageAsBase64(imageUrl);
     const messages: Message[] = [{
       role: 'user',
       content: [
         { type: 'text', text: prompt },
-        { type: 'image_url', image_url: { url: imageUrl } },
+        { type: 'image_url', image_url: { url: image.dataUrl } },
       ],
     }];
 
@@ -119,19 +122,8 @@ class ImageAnalysisAPI implements ModelAPIInterface {
     return content.trim();
   }
 
-  private async fetchImageAsBase64(imageUrl: string): Promise<{ base64: string; mimeType: string }> {
-    const response = await (this.fetchImpl ?? fetch)(imageUrl);
-    if (!response.ok) throw new Error(`Could not download image: HTTP ${response.status}`);
-
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > MAX_IMAGE_BYTES) {
-      throw new Error(`Image exceeds the ${MAX_IMAGE_BYTES}-byte analysis limit.`);
-    }
-    const declared = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    return {
-      base64: toBase64(bytes),
-      mimeType: declared.startsWith('image/') ? declared : 'image/jpeg',
-    };
+  private async fetchImageAsBase64(imageUrl: string) {
+    return await inlineImage(imageUrl, this.fetchImpl ?? fetch);
   }
 
   async generateResponse(_messages: Message[], _model?: string): Promise<string> {
@@ -162,20 +154,6 @@ class ImageAnalysisAPI implements ModelAPIInterface {
 function requireEnvConfig(env?: Env): ImageAnalysisConfig {
   if (!env) throw new Error('ImageAnalysisAPI requires an Env or an explicit config.');
   return imageAnalysisConfigFromEnv(env);
-}
-
-/**
- * Chunked so a large image cannot overflow the call stack. Spreading a
- * multi-megabyte Uint8Array into String.fromCharCode throws RangeError once the
- * argument count passes the engine's limit.
- */
-function toBase64(bytes: Uint8Array): string {
-  const CHUNK = 0x8000;
-  let binary = '';
-  for (let offset = 0; offset < bytes.length; offset += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK));
-  }
-  return btoa(binary);
 }
 
 export default ImageAnalysisAPI;

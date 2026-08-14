@@ -272,6 +272,36 @@ function projectedCost(inputTokens, outputTokens = maxOutputTokens) {
   return ((inputTokens / 1000000) * inputUsdPerMTokens) + ((outputTokens / 1000000) * outputUsdPerMTokens);
 }
 
+// Live progress for Telegram. Only the tool name and a step counter are sent:
+// tool arguments and reasoning are untrusted model output and must never be
+// relayed into a chat. Reporting is fire-and-forget and rate limited locally,
+// so a tight tool loop cannot turn into a burst of Worker requests, and a
+// failed report can never fail the job.
+const progressUrl = process.env.BOX_PROGRESS_URL ?? "";
+const progressToken = process.env.BOX_PROGRESS_TOKEN ?? "";
+const progressJobId = process.env.BOX_JOB_ID ?? "";
+const PROGRESS_MIN_INTERVAL_MS = 5000;
+let lastProgressAt = 0;
+let progressSteps = 0;
+
+function reportProgress(toolName) {
+  if (!progressUrl || !progressToken || !progressJobId) return;
+  const now = Date.now();
+  if (now - lastProgressAt < PROGRESS_MIN_INTERVAL_MS) return;
+  lastProgressAt = now;
+  progressSteps += 1;
+  const safeName = String(toolName ?? "tool").replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 40) || "tool";
+  void fetch(progressUrl, {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + progressToken,
+      "Content-Type": "application/json",
+      "X-Box-Job-Id": progressJobId,
+    },
+    body: JSON.stringify({ step: "step " + progressSteps + " · " + safeName }),
+  }).catch(() => {});
+}
+
 try {
   process.chdir(WORK_DIR);
   await mkdir(sessionDir, { recursive: true });
@@ -400,6 +430,7 @@ try {
       }
     } else if (event.type === "tool_execution_start") {
       emit("tool", { name: event.toolName, toolCallId: event.toolCallId, input: event.args ?? {} });
+      reportProgress(event.toolName);
     } else if (event.type === "tool_execution_end") {
       emit("tool_result", {
         toolCallId: event.toolCallId,

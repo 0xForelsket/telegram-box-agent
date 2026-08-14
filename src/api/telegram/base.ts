@@ -35,6 +35,7 @@ import {
 } from "../../agent/agent_run_store";
 import { BoxJobService } from "../../agent/box/box_job_service";
 import type { BoxJob } from "../../agent/box/box_job_store";
+import type { BoxRouteDecision } from "../../agent/box/hybrid_router";
 import { ArtifactGateway } from "../../agent/box/artifact_gateway";
 import { BoxScheduleService } from "../../agent/box/box_schedule_service";
 import type { PromptFiles } from "@upstash/box";
@@ -601,6 +602,27 @@ export abstract class TelegramBotBase implements TelegramCommandBot {
 
   abstract handleBoxScheduleCompletion(request: Request): Promise<Response>;
 
+  abstract handleBoxProgress(request: Request): Promise<Response>;
+
+  abstract handleBoxActionRequest(request: Request): Promise<Response>;
+
+  abstract handleBoxActionResult(request: Request): Promise<Response>;
+
+  abstract approveBrokeredAction(
+    chatId: number,
+    userId: string,
+    actionId: string,
+    nonce: string,
+  ): Promise<string>;
+
+  abstract denyBrokeredAction(
+    chatId: number,
+    userId: string,
+    actionId: string,
+  ): Promise<string>;
+
+  abstract listBrokeredActions(chatId: number, userId: string): Promise<string>;
+
   abstract handleBoxArtifactAuthorization(request: Request): Promise<Response>;
 
   abstract handleBoxArtifactUpload(
@@ -622,6 +644,7 @@ export abstract class TelegramBotBase implements TelegramCommandBot {
     request: string,
     requestedRoute?: string,
     files?: PromptFiles,
+    routeDecision?: BoxRouteDecision,
   ): Promise<void>;
 
   abstract runQuickChat(
@@ -669,6 +692,8 @@ export abstract class TelegramBotBase implements TelegramCommandBot {
     id: string,
     action: "pause" | "resume" | "delete",
   ): Promise<string>;
+
+  abstract listArtifacts(chatId: number, userId: string): Promise<string>;
 
   abstract getArtifactLink(
     chatId: number,

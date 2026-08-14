@@ -404,6 +404,7 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
         openai: this.config.openaiSearchMonthlyCap,
         gemini_grounding: this.config.geminiSearchMonthlyCap,
       },
+      this.config.defaultTimezone,
     );
   }
 
@@ -1288,7 +1289,7 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
 
   protected getCurrentDateString(): string {
     return new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Kuala_Lumpur",
+      timeZone: this.config.defaultTimezone,
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -1297,8 +1298,9 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
 
   protected getCurrentDateTimeInstruction(promptText: string): string {
     const asksForClockTime = /\b(time|what time|right now)\b/i.test(promptText);
+    const timezone = this.config.defaultTimezone;
     const now = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Kuala_Lumpur",
+      timeZone: timezone,
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -1312,8 +1314,8 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
     }).format(new Date());
 
     return asksForClockTime
-      ? `Current local date and time is ${now} GMT+8 (Asia/Kuala_Lumpur). Use this timezone unless the user explicitly asks for another timezone.`
-      : `Current local date is ${now} in Asia/Kuala_Lumpur. Use this date for current, recent, and relative-date questions.`;
+      ? `Current local date and time is ${now} in ${timezone}. Use this timezone unless the user explicitly asks for another timezone.`
+      : `Current local date is ${now} in ${timezone}. Use this date for current, recent, and relative-date questions.`;
   }
 
   protected async runReminderTool(
@@ -1545,7 +1547,7 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
 
   protected getMonthlyWebSearchUsageKey(): string {
     const month = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Kuala_Lumpur",
+      timeZone: this.config.defaultTimezone,
       year: "numeric",
       month: "2-digit",
     }).format(new Date());
@@ -1623,8 +1625,15 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
   }
 
   async setCurrentModel(sessionKey: string, model: string): Promise<void> {
-    await this.redis.set(`model:${sessionKey}`, model);
-    console.log(`Switching to model: ${model}`);
+    // `resolveCurrentModel` silently falls back to the default for anything
+    // this rejects, so accepting it here would store a value that reads back
+    // as a different model on the very next turn.
+    const normalized = this.normalizeModelName(model);
+    if (!this.isConfiguredModel(normalized)) {
+      throw new Error(`"${model}" is not a configured model.`);
+    }
+    await this.redis.set(`model:${sessionKey}`, normalized);
+    console.log(`Switching to model: ${normalized}`);
     this.modelAPI = await this.initializeModelAPI(sessionKey);
   }
 
@@ -1636,6 +1645,12 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
     return this.modelAPI.isValidModel(model);
   }
 
+  /**
+   * Only models that survive `isConfiguredModel` are offered. A model returned
+   * by provider discovery but absent from `OPENAI_COMPATIBLE_MODELS` cannot be
+   * kept — `resolveCurrentModel` reverts it on the next turn — so listing it
+   * would offer a switch that silently undoes itself.
+   */
   async getSelectableModels(): Promise<string[]> {
     const availableModels = [
       ...this.config.openaiModels,
@@ -1645,19 +1660,33 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
       ...this.config.azureModels,
     ];
     if (this.config.openaiCompatibleUrl) {
+      let discovered = this.config.openaiCompatibleModels;
       try {
-        availableModels.push(
-          ...(await new OpenAICompatibleAPI(this.env).getModels()),
-        );
+        discovered = await new OpenAICompatibleAPI(this.env).getModels();
       } catch (error) {
         console.error(
           "Failed to load OpenAI-compatible models for picker:",
           error,
         );
-        availableModels.push(...this.config.openaiCompatibleModels);
       }
+      const unlisted = discovered.filter(
+        (model) => !this.isConfiguredModel(this.normalizeModelName(model)),
+      );
+      if (unlisted.length > 0) {
+        console.warn(
+          `Provider offers ${unlisted.length} model(s) missing from OPENAI_COMPATIBLE_MODELS; ` +
+            `they cannot be selected until listed: ${unlisted.slice(0, 10).join(", ")}`,
+        );
+      }
+      availableModels.push(...this.config.openaiCompatibleModels);
     }
-    return [...new Set(availableModels)];
+    return [
+      ...new Set(
+        availableModels.filter((model) =>
+          this.isConfiguredModel(this.normalizeModelName(model)),
+        ),
+      ),
+    ];
   }
 
   recordModelOperation(

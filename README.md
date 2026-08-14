@@ -95,6 +95,12 @@ when they clearly require file generation, browser automation, code execution,
 repository work, or a multi-step deliverable. The normal model does not spend a
 turn deciding whether to hand off.
 
+The router matches patterns in free text, so it will misfire. Two things bound
+the cost: an auto-routed request states which rule fired and how to override it
+with `/quick`, and one that Box declines on policy, quota, or concurrency falls
+back to the ordinary chat path instead of failing. An explicit `/agent` still
+reports the refusal, because there the user asked for Box specifically.
+
 Documents sent with an explicit `/agent` caption are staged into the job. Inputs
 downloaded through Telegram are limited to 20 MB; larger inputs must be supplied
 through an accessible URL.
@@ -167,7 +173,10 @@ Core agent commands:
 - `/agent schedule create <5-field UTC cron> [--model deepseek|glm] <request>` — create an owner-only persistent schedule
 - `/agent schedule list` — list schedules
 - `/agent schedule pause|resume|delete <schedule-id>` — manage schedules
+- `/artifact list` — stored artifacts with size and remaining retention
 - `/artifact <artifact-id>` — issue a fresh download link
+- `/action list` — owner-only view of brokered external-write requests
+- `/action approve <action-id> <nonce>` / `/action deny <action-id>` — owner-only
 - `/box enable` — owner-only binding of Box to the current numeric group ID
 
 Run `/help` for chat, search, memory, utility, audio, reminder, and digest
@@ -229,6 +238,12 @@ external services.
 - Secrets belong in Wrangler secrets or `.dev.vars`, never source control.
 - Model-provider authorization is attached by the Box host to the exact provider
   hostname; the secret does not enter the container.
+- External writes covered by the action broker are mediated rather than
+  classified: the sandbox can only request a named, structured action, and the
+  Worker performs it with its own credential after owner approval. Disabled by
+  default, and an empty repository allowlist permits nothing.
+- Vision requests inline image bytes rather than passing a Telegram file URL to
+  a provider, so the bot token is never disclosed to a model host.
 - URL fetching rejects private, loopback, link-local, metadata, and reserved
   addresses, including IPv4 smuggled inside IPv6. This is defence in depth: a
   Worker resolves DNS inside `fetch`, so a public hostname pointing at an

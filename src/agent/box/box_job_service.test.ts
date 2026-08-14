@@ -54,13 +54,31 @@ function createHarness(overrides: Partial<Env> = {}) {
     return { boxId: 'box-1', runId: 'run-1', route: input.route.route, model: input.route.model };
   });
   const sendMessage = vi.fn(async () => undefined);
+  const editMessage = vi.fn(async () => undefined);
   const sendDocument = vi.fn(async () => undefined);
   const deleteBox = vi.fn(async () => undefined);
   const resumeJob = vi.fn(async () => 'run-2');
+  let clock = now;
   const service = new BoxJobService(createEnv(overrides), redis as unknown as RedisClient, {
-    store, launchJob, sendMessage, sendDocument, deleteBox, resumeJob, now: () => now,
+    store, launchJob, sendMessage, editMessage, sendDocument, deleteBox, resumeJob, now: () => clock,
   });
-  return { redis, store, launches, launchJob, sendMessage, sendDocument, deleteBox, resumeJob, service };
+  return {
+    redis, store, launches, launchJob, sendMessage, editMessage, sendDocument,
+    deleteBox, resumeJob, service,
+    advance: (ms: number) => { clock += ms; },
+  };
+}
+
+function progressRequest(jobId: string, token: string, step: string): Request {
+  return new Request('https://worker.example/box/progress', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-Box-Job-Id': jobId,
+    },
+    body: JSON.stringify({ step }),
+  });
 }
 
 describe('BoxJobService', () => {
@@ -287,3 +305,91 @@ function base64Url(value: string): string {
   const binary = [...new TextEncoder().encode(value)].map(byte => String.fromCharCode(byte)).join('');
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
+
+describe('BoxJobService progress', () => {
+  async function runningJob() {
+    const harness = createHarness();
+    await harness.service.bindChat(-100, 'group:-100');
+    const queued = await harness.service.queue({
+      chatId: -100, sessionKey: 'group:-100', userId: 'owner', request: 'Build a PDF report',
+    });
+    await queued.provision();
+    const token = harness.launches[0].progressSession!.token;
+    await harness.service.attachProgressMessage(queued.job.id, 4242, 'Queued Box job.');
+    return { harness, jobId: queued.job.id, token };
+  }
+
+  it('gives the Box a progress endpoint scoped to its own job', async () => {
+    const { harness, jobId } = await runningJob();
+
+    expect(harness.launches[0].progressSession).toMatchObject({
+      url: 'https://worker.example/box/progress',
+    });
+    expect(await harness.store.verifyArtifactSession(jobId, harness.launches[0].progressSession!.token))
+      .not.toBeNull();
+  });
+
+  it('edits the acknowledgement message rather than sending a new one', async () => {
+    const { harness, jobId, token } = await runningJob();
+    harness.sendMessage.mockClear();
+
+    const response = await harness.service.handleProgress(progressRequest(jobId, token, 'step 1 · bash'));
+
+    expect(response.status).toBe(200);
+    expect(harness.editMessage).toHaveBeenCalledWith(-100, 4242, expect.stringContaining('step 1 · bash'));
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+  });
+
+  // An agent in a tight tool loop must not translate into one Telegram edit per
+  // tool call; the Worker, not the Box, decides how often an edit happens.
+  it('throttles updates that arrive too close together', async () => {
+    const { harness, jobId, token } = await runningJob();
+
+    await harness.service.handleProgress(progressRequest(jobId, token, 'step 1 · bash'));
+    const throttled = await harness.service.handleProgress(progressRequest(jobId, token, 'step 2 · read'));
+
+    expect(await throttled.json()).toMatchObject({ throttled: true });
+    expect(harness.editMessage).toHaveBeenCalledOnce();
+
+    harness.advance(10_000);
+    await harness.service.handleProgress(progressRequest(jobId, token, 'step 3 · write'));
+
+    expect(harness.editMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects progress signed with another job\'s session token', async () => {
+    const { harness, jobId } = await runningJob();
+
+    const response = await harness.service.handleProgress(
+      progressRequest(jobId, 'a'.repeat(32), 'step 1 · bash'),
+    );
+
+    expect(response.status).toBe(401);
+    expect(harness.editMessage).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed progress payload', async () => {
+    const { harness, jobId, token } = await runningJob();
+
+    const response = await harness.service.handleProgress(
+      new Request('https://worker.example/box/progress', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'X-Box-Job-Id': jobId },
+        body: JSON.stringify({ step: '' }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it('ignores progress for a job that already reached a terminal state', async () => {
+    const { harness, jobId, token } = await runningJob();
+    await harness.service.cancel(-100, 'owner', true, jobId);
+    harness.editMessage.mockClear();
+
+    const response = await harness.service.handleProgress(progressRequest(jobId, token, 'step 1 · bash'));
+
+    expect(await response.json()).toMatchObject({ throttled: true });
+    expect(harness.editMessage).not.toHaveBeenCalled();
+  });
+});

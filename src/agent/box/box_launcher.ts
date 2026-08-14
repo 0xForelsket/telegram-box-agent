@@ -19,6 +19,7 @@ import {
 const HARNESS_PATH = '/workspace/home/custom-pi-agent.mjs';
 const ARTIFACT_PUBLISHER_PATH = '/workspace/home/publish-artifact.mjs';
 const EXECUTION_POLICY_PATH = '/workspace/home/box-execution-policy.mjs';
+const ACTION_REQUEST_PATH = '/workspace/home/request-action.mjs';
 
 // Research jobs need broad public-web access. Custom mode blocks private IP
 // ranges even for allowed hostnames. Public-suffix rules preserve research,
@@ -56,6 +57,18 @@ export interface LaunchPiBoxJobInput {
   artifactSession?: {
     authorizeUrl: string;
     token: string;
+  };
+  /** Endpoint the harness posts live tool progress to. Cosmetic; never fatal. */
+  progressSession?: {
+    url: string;
+    token: string;
+  };
+  /** Broker endpoints for allowlisted external writes the Worker performs. */
+  actionSession?: {
+    requestUrl: string;
+    resultUrl: string;
+    token: string;
+    availableActions: string[];
   };
   approvalNonce: string;
   sessionId?: string;
@@ -195,6 +208,17 @@ export async function launchPiBoxJob(input: LaunchPiBoxJobInput): Promise<Launch
         BOX_ARTIFACT_SESSION_TOKEN: input.artifactSession.token,
         BOX_JOB_ID: jobId,
       } : {}),
+      ...(input.progressSession ? {
+        BOX_PROGRESS_URL: input.progressSession.url,
+        BOX_PROGRESS_TOKEN: input.progressSession.token,
+        BOX_JOB_ID: jobId,
+      } : {}),
+      ...(input.actionSession ? {
+        BOX_ACTION_REQUEST_URL: input.actionSession.requestUrl,
+        BOX_ACTION_RESULT_URL: input.actionSession.resultUrl,
+        BOX_ACTION_TOKEN: input.actionSession.token,
+        BOX_JOB_ID: jobId,
+      } : {}),
     },
   };
 
@@ -217,9 +241,12 @@ export async function launchPiBoxJob(input: LaunchPiBoxJobInput): Promise<Launch
     if (input.artifactSession) {
       await box.files.write({ path: ARTIFACT_PUBLISHER_PATH, content: ARTIFACT_PUBLISHER_SOURCE });
     }
+    if (input.actionSession) {
+      await box.files.write({ path: ACTION_REQUEST_PATH, content: ACTION_REQUEST_SOURCE });
+    }
 
     const run = await box.agent.run({
-      prompt: input.artifactSession ? withArtifactInstructions(prompt) : prompt,
+      prompt: buildJobPrompt(prompt, input),
       files: input.files,
       maxRetries: 0,
       webhook: {
@@ -241,9 +268,63 @@ export async function launchPiBoxJob(input: LaunchPiBoxJobInput): Promise<Launch
   }
 }
 
-function withArtifactInstructions(prompt: string): string {
-  return `${prompt}\n\nWhen the user requests a downloadable file, create it under /workspace/home and publish each final file by running: node ${ARTIFACT_PUBLISHER_PATH} <absolute-file-path> [content-type]. Mention the published filename in your final response. Do not inline binary data.`;
+function buildJobPrompt(prompt: string, input: LaunchPiBoxJobInput): string {
+  const sections = [prompt];
+  if (input.artifactSession) sections.push(ARTIFACT_INSTRUCTIONS);
+  if (input.actionSession) sections.push(actionInstructions(input.actionSession.availableActions));
+  return sections.join('\n\n');
 }
+
+const ARTIFACT_INSTRUCTIONS =
+  `When the user requests a downloadable file, create it under /workspace/home and publish each final file by running: node ${ARTIFACT_PUBLISHER_PATH} <absolute-file-path> [content-type]. Mention the published filename in your final response. Do not inline binary data.`;
+
+/**
+ * Tells the agent that external writes exist but are not its to perform. The
+ * point is not to make the agent trustworthy — it is that the only path that
+ * works is the one that goes through owner approval, so an agent that ignores
+ * this simply fails instead of succeeding by another route.
+ */
+function actionInstructions(availableActions: string[]): string {
+  return [
+    'External writes are not performed in this sandbox. You have no credentials for third-party services, and attempts to write through curl, gh, git push, or any other tool will fail.',
+    `To make an approved external change, run: node ${ACTION_REQUEST_PATH} '<json>' where <json> is {"action":"<name>","params":{...}}.`,
+    `Available actions: ${availableActions.join(', ') || 'none configured'}.`,
+    'The command blocks until the bot owner approves or denies the exact request, then prints the outcome as JSON. Treat a denial or timeout as a final answer, report it plainly, and do not retry with a different tool.',
+  ].join('\n');
+}
+
+export const ACTION_REQUEST_SOURCE = String.raw`
+const [payload] = process.argv.slice(2);
+if (!payload) throw new Error("Usage: request-action.mjs '<json>'");
+const requestUrl = process.env.BOX_ACTION_REQUEST_URL;
+const resultUrl = process.env.BOX_ACTION_RESULT_URL;
+const token = process.env.BOX_ACTION_TOKEN;
+const jobId = process.env.BOX_JOB_ID;
+if (!requestUrl || !resultUrl || !token || !jobId) throw new Error("The action broker is not configured for this job.");
+
+const headers = { "Authorization": "Bearer " + token, "Content-Type": "application/json", "X-Box-Job-Id": jobId };
+const requested = await fetch(requestUrl, { method: "POST", headers, body: payload });
+const requestBody = await requested.json().catch(() => ({}));
+if (!requested.ok) throw new Error("Action request refused: " + requested.status + " " + JSON.stringify(requestBody));
+
+const actionId = requestBody.actionId;
+console.error("[action] awaiting owner approval for " + actionId);
+
+// Polled rather than pushed: the sandbox has no inbound route, and the wait is
+// bounded by the Worker's own approval window.
+const deadline = Date.now() + 16 * 60 * 1000;
+while (Date.now() < deadline) {
+  await new Promise(resolve => setTimeout(resolve, 10000));
+  const polled = await fetch(resultUrl + "?id=" + encodeURIComponent(actionId), { headers });
+  if (!polled.ok) continue;
+  const state = await polled.json().catch(() => ({}));
+  if (state.status === "pending" || state.status === "approved") continue;
+  console.log(JSON.stringify({ action_id: actionId, status: state.status, result: state.result, error: state.error }));
+  process.exit(state.status === "executed" ? 0 : 1);
+}
+console.log(JSON.stringify({ action_id: actionId, status: "expired" }));
+process.exit(1);
+`;
 
 export const ARTIFACT_PUBLISHER_SOURCE = String.raw`
 import { createReadStream } from "node:fs";

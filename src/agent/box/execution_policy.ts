@@ -99,7 +99,7 @@ function approved(actionHash, nonce) {
 
 export default function (pi) {
   pi.on("before_agent_start", event => ({
-    systemPrompt: event.systemPrompt + "\n\nSandbox policy: local shell, files, packages, code, browsers, and artifact creation are allowed. Permanent external-integration credentials are never provided. Read-only public network access is allowed. Do not deploy, spend money, push, destructively mutate external systems, or communicate with third parties unless the exact action has been approved through the Telegram approval gate. Never evade a blocked tool call.",
+    systemPrompt: event.systemPrompt + "\n\nSandbox policy: local shell, files, packages, code, browsers, and artifact creation are allowed. Permanent external-integration credentials are never provided. Read-only public network access is allowed. Do not deploy, spend money, push, destructively mutate external systems, or communicate with third parties unless the exact action has been approved through the Telegram approval gate. Where an action broker is available, request the external write through it instead of attempting the write yourself; no other path has credentials and none will succeed. Never evade a blocked tool call.",
   }));
   pi.on("tool_call", event => {
     if (event.toolName !== "bash") return;

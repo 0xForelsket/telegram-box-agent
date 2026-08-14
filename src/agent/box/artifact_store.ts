@@ -2,8 +2,16 @@ import type { RedisClient } from '../../utils/redis';
 
 const RECORD_PREFIX = 'box_artifact:v1:';
 const JOB_INDEX_PREFIX = 'box_artifacts:v1:job:';
+const CHAT_INDEX_PREFIX = 'box_artifacts:v1:chat:';
 const IDEMPOTENCY_PREFIX = 'box_artifact_idempotency:v1:';
 const RECORD_TTL_SECONDS = 45 * 24 * 60 * 60;
+
+/**
+ * Matches the R2 lifecycle rule on the `jobs/` prefix. The bucket is the
+ * authority; this only lets the bot say how long an object has left before
+ * that rule removes it.
+ */
+export const ARTIFACT_RETENTION_DAYS = 30;
 
 export type ArtifactStatus = 'authorized' | 'uploaded';
 
@@ -69,6 +77,9 @@ export class ArtifactStore {
     await Promise.all([
       this.save(artifact),
       this.redis.zadd(`${JOB_INDEX_PREFIX}${artifact.jobId}`, now, artifact.id),
+      // Chat-scoped index so `/artifact list` is one range read rather than a
+      // walk over every recent job's artifact index.
+      this.redis.zadd(`${CHAT_INDEX_PREFIX}${artifact.chatId}`, now, artifact.id),
       ...(input.idempotencyKey
         ? [this.redis.set(`${IDEMPOTENCY_PREFIX}${artifact.jobId}:${input.idempotencyKey}`, artifact.id, RECORD_TTL_SECONDS)]
         : []),
@@ -97,6 +108,21 @@ export class ArtifactStore {
       })
       .filter((value): value is BoxArtifact => !!value && value.jobId === normalized);
     return artifacts.sort((left, right) => left.createdAt - right.createdAt);
+  }
+
+  /**
+   * Artifacts created in a chat, newest first. Records predating the chat
+   * index are absent; they remain reachable by `/artifact <id>`.
+   */
+  async listForChat(chatId: number, limit = 25): Promise<BoxArtifact[]> {
+    const ids = await this.redis.zrangeAll(`${CHAT_INDEX_PREFIX}${chatId}`, limit);
+    const artifacts = (await this.redis.getMany(ids.map(id => this.key(id))))
+      .map(raw => {
+        if (!raw) return null;
+        try { return JSON.parse(raw) as BoxArtifact; } catch { return null; }
+      })
+      .filter((value): value is BoxArtifact => !!value && value.chatId === chatId);
+    return artifacts.sort((left, right) => right.createdAt - left.createdAt);
   }
 
   async verifyUploadToken(id: string, token: string): Promise<BoxArtifact | null> {

@@ -1,6 +1,7 @@
 import { Command } from "../command_types";
 import { translate, translateMessage, UserMessageKey } from "../../utils/i18n";
 import { commands } from "../commands";
+import { encodeModelCallbackData, fitsCallbackData } from "../callback_data";
 import {
   formatProviderHealth,
   requireGroupAdmin,
@@ -39,15 +40,32 @@ export const coreCommands: Command[] = [
         const availableModels = await bot.getSelectableModels();
 
         console.log("Available models:", availableModels);
+        // One oversized button makes Telegram reject the whole message, so a
+        // name that cannot be encoded is dropped from the picker instead.
+        const selectable = availableModels.filter((model) =>
+          fitsCallbackData(encodeModelCallbackData(model)),
+        );
+        const skipped = availableModels.length - selectable.length;
+        if (selectable.length === 0) {
+          await bot.sendMessage(
+            chatId,
+            `${translate("error")}\nNo configured model name is short enough for a Telegram button.`,
+          );
+          return;
+        }
         const keyboard = {
-          inline_keyboard: availableModels.map((model) => [
-            { text: model, callback_data: `model_${model}` },
+          inline_keyboard: selectable.map((model) => [
+            { text: model, callback_data: encodeModelCallbackData(model) },
           ]),
         };
         console.log("Sending message with model selection keyboard");
-        await bot.sendMessage(chatId, translate("choose_model"), {
-          reply_markup: JSON.stringify(keyboard),
-        });
+        await bot.sendMessage(
+          chatId,
+          skipped > 0
+            ? `${translate("choose_model")}\n(${skipped} model name${skipped === 1 ? "" : "s"} too long for a button.)`
+            : translate("choose_model"),
+          { reply_markup: JSON.stringify(keyboard) },
+        );
         console.log("Message sent successfully");
       } catch (error) {
         console.error("Error in switchmodel command:", error);

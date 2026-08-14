@@ -13,7 +13,13 @@ import { SharedScheduler } from "../../scheduling/scheduler";
 import { AudioAPI } from "../audio";
 import { TelegramStreamingReply } from "../../telegram/streaming_reply";
 import { DashboardAccess } from "../../dashboard/dashboard";
-import { shouldRouteToBox } from "../../agent/box/hybrid_router";
+import {
+  classifyBoxRoute,
+  type BoxRouteDecision,
+} from "../../agent/box/hybrid_router";
+import { isBoxAdmissionError } from "../../agent/box/box_job_service";
+import { MODEL_CALLBACK_PREFIX } from "../../config/callback_data";
+import { isUserFacingError } from "../../utils/user_facing_error";
 import type { PromptFiles } from "@upstash/box";
 
 import { type ImageCapableAPI } from "./types";
@@ -275,13 +281,26 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
             return;
           }
           const commandName = rawCommandName.split("@")[0];
-          await this.executeCommand(
-            commandName,
-            chatId,
-            sessionKey,
-            userId,
-            args,
-          );
+          try {
+            await this.executeCommand(
+              commandName,
+              chatId,
+              sessionKey,
+              userId,
+              args,
+            );
+          } catch (error) {
+            // Most command actions have no error handling of their own. Without
+            // this the rejection reached `handleWebhook`, which only logs, so a
+            // failing command produced complete silence in the chat.
+            console.error(`Error in /${commandName}:`, error);
+            this.runBackground("notifyCommandError", async () => {
+              await this.sendMessageWithFallback(
+                chatId,
+                this.getUserFacingErrorMessage(error),
+              );
+            });
+          }
         } else {
           try {
             const mentionsBot = await this.messageMentionsBot(
@@ -299,18 +318,24 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
             }
 
             const cleanedText = await this.stripBotMention(update.message.text);
+            const routeDecision = classifyBoxRoute(cleanedText);
             if (
               chatType !== "private" &&
-              shouldRouteToBox(cleanedText) &&
+              routeDecision.route &&
               (await this.boxJobs().canRunInChat(chatId))
             ) {
-              await this.startBoxAgentJob(
+              // The router is a heuristic over free text and will misfire. An
+              // auto-routed request that Box refuses falls through to the
+              // ordinary chat path instead of costing the user their answer;
+              // an explicit /agent still surfaces the refusal.
+              const started = await this.tryStartAutoRoutedBoxJob(
                 chatId,
                 sessionKey,
                 userId,
                 cleanedText,
+                routeDecision,
               );
-              return;
+              if (started) return;
             }
             const replyContext = this.formatReplyContext(
               update.message,
@@ -394,6 +419,42 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
     }
   }
 
+  /**
+   * Starts a Box job that the router chose rather than the user.
+   *
+   * Returns false when Box declined the request, so the caller can answer on
+   * the ordinary chat path. Only admission failures fall back: a genuine
+   * provisioning fault is still an error worth reporting, because the user's
+   * request was accepted and then failed.
+   */
+  protected async tryStartAutoRoutedBoxJob(
+    chatId: number,
+    sessionKey: string,
+    userId: string,
+    request: string,
+    decision: BoxRouteDecision,
+  ): Promise<boolean> {
+    try {
+      await this.startBoxAgentJob(
+        chatId,
+        sessionKey,
+        userId,
+        request,
+        undefined,
+        undefined,
+        decision,
+      );
+      return true;
+    } catch (error) {
+      if (!isBoxAdmissionError(error)) throw error;
+      console.log(
+        `Auto-routed Box job declined (${decision.rule}); answering on the chat path:`,
+        error.message,
+      );
+      return false;
+    }
+  }
+
   protected async handleCallbackQuery(
     query: TelegramTypes.CallbackQuery,
   ): Promise<void> {
@@ -424,10 +485,22 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
 
       console.log("Handling callback query:", query.data);
 
-      if (query.data.startsWith("model_")) {
-        const newModel = query.data.split("_")[1];
+      if (query.data.startsWith(MODEL_CALLBACK_PREFIX)) {
+        // slice, not split("_"): a model name may itself contain underscores,
+        // and splitting silently truncated it to the first segment.
+        const newModel = query.data.slice(MODEL_CALLBACK_PREFIX.length);
         console.log("Switching to model:", newModel);
         try {
+          // Validate before clearing context. Storing an unknown model made
+          // the next turn fall back to the default, so the user lost their
+          // history and was told the switch had succeeded.
+          if (!this.isConfiguredModel(this.normalizeModelName(newModel))) {
+            await this.sendMessageWithFallback(
+              chatId,
+              `${translate("error")}\n"${newModel}" is not a configured model. Run /switchmodel again.`,
+            );
+            return;
+          }
           await this.clearContext(sessionKey, chatId, userId);
           await this.setCurrentModel(sessionKey, newModel);
           await this.sendMessageWithFallback(
@@ -918,6 +991,11 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
 
   protected getUserFacingErrorMessage(error: unknown): string {
     const fallback = translate("error");
+    // A policy or admission message is the actionable part of the answer;
+    // replacing it with "an error occurred" strands the user.
+    if (isUserFacingError(error)) {
+      return error.message;
+    }
     if (!(error instanceof Error)) {
       return fallback;
     }
