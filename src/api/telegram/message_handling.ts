@@ -347,7 +347,7 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
     if (replacement) {
       await this.sendMessageWithFallback(
         chatId,
-        `/${commandName} is now ${replacement}`,
+        `/${commandName} → ${replacement}`,
       );
       return;
     }

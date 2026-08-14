@@ -74,6 +74,7 @@ export interface TelegramCommandBot {
   clearContext(sessionKey: string, chatId: number, userId?: string): Promise<void>;
   summarizeHistory(sessionKey: string): Promise<string>;
   getGroupProfile(sessionKey: string): Promise<string | null>;
+  getBotSettings(sessionKey: string): Promise<BotSettings>;
   setGroupProfile(sessionKey: string, profile: string): Promise<void>;
   appendGroupProfile(sessionKey: string, note: string): Promise<void>;
   clearGroupProfile(sessionKey: string): Promise<void>;

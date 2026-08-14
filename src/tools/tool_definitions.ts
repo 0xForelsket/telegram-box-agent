@@ -12,13 +12,21 @@ export const WEB_SEARCH_TOOL: ToolDefinition = {
   type: 'function',
   function: {
     name: 'web_search',
-    description: 'Search the live web for current facts, breaking news, recent events, recent product changes, live prices, or anything likely to have changed recently.',
+    description: 'Search the live web for current facts, breaking news, recent events, recent product changes, live prices, or anything likely to have changed recently. Use depth "deep" for a question that needs several searches cross-checked against each other rather than one lookup.',
     parameters: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
           description: 'A concise search query for the current information you need.',
+        },
+        depth: {
+          type: 'string',
+          enum: ['quick', 'deep'],
+          // `deep` reaches the multi-query research flow, which the retired
+          // /research command was the only way to trigger. Kept as a parameter
+          // rather than a second tool so the catalogue does not grow.
+          description: 'Defaults to quick. "deep" runs several ranked searches and reads the best pages; it is slower and costs more.',
         },
       },
       required: ['query'],
@@ -50,11 +58,22 @@ export const CALCULATOR_TOOL: ToolDefinition = {
   type: 'function',
   function: {
     name: 'calculator',
-    description: 'Evaluate exact arithmetic. Use this instead of mental arithmetic when a numeric result matters. Supports +, -, *, /, %, ^, and parentheses.',
+    // Widened rather than split into four tools: every tool schema ships in
+    // every prompt, so one `operation` enum costs far less than three more
+    // entries in the catalogue.
+    description: 'Exact deterministic computation: arithmetic, unit conversion, clock time in a timezone, and date arithmetic. Use this instead of working any of them out yourself when the result matters.',
     parameters: {
       type: 'object',
       properties: {
-        expression: { type: 'string', description: 'Arithmetic expression, for example "(1250 * 1.06) / 12".' },
+        operation: {
+          type: 'string',
+          enum: ['arithmetic', 'convert', 'time', 'date'],
+          description: 'Defaults to arithmetic when omitted.',
+        },
+        expression: {
+          type: 'string',
+          description: 'arithmetic: "(1250 * 1.06) / 12". convert: "12 km to miles". time: an IANA zone such as "Asia/Tokyo". date: "days between 2026-01-01 and 2026-08-14" or "2026-08-14 plus 90 days".',
+        },
       },
       required: ['expression'],
       additionalProperties: false,
@@ -133,14 +152,21 @@ export const REMINDER_TOOL: ToolDefinition = {
   type: 'function',
   function: {
     name: 'manage_reminders',
-    description: "Create, list, or cancel Telegram reminders for this chat. Times are interpreted in the bot's configured timezone. Only mutate reminders when the user clearly requests it.",
+    // Reminders and digests are the same durable scheduler subsystem, so they
+    // share one tool rather than duplicating the schema under another name.
+    description: "Create, list, or cancel this chat's scheduled work: one-off and recurring reminders, and recurring feed/search/stock digests. Times are interpreted in the bot's configured timezone. Only mutate schedules when the user clearly requests it.",
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['create', 'list', 'cancel'] },
-        schedule: { type: 'string', description: 'For create: "in 20m", "tomorrow 09:00", "daily 09:00", "weekly mon 09:00", or "YYYY-MM-DD HH:MM".' },
-        text: { type: 'string', description: 'For create: reminder message.' },
-        id: { type: 'string', description: 'For cancel: reminder ID returned by create or list.' },
+        kind: {
+          type: 'string',
+          enum: ['reminder', 'digest'],
+          description: 'Defaults to reminder when omitted.',
+        },
+        schedule: { type: 'string', description: 'For create: "in 20m", "tomorrow 09:00", "daily 09:00", "weekly mon 09:00", or "YYYY-MM-DD HH:MM". Digests must be daily or weekly.' },
+        text: { type: 'string', description: 'For a reminder: the message. For a digest: "feeds", "search <topic>", or "stock <symbol>".' },
+        id: { type: 'string', description: 'For cancel: ID returned by create or list.' },
       },
       required: ['action'],
       additionalProperties: false,
@@ -152,12 +178,19 @@ export const MEMORY_TOOL: ToolDefinition = {
   type: 'function',
   function: {
     name: 'manage_memory',
-    description: 'Explicitly save, recall, or forget durable facts and preferences for this chat. Only save or delete memory when the user clearly asks; recall when past preferences or facts are relevant.',
+    // Bookmarks and feed subscriptions are saved-for-later state like durable
+    // facts, so they extend this tool instead of adding two more schemas.
+    description: "Explicitly save, recall, or forget this chat's durable state: facts and preferences, saved bookmarks, and followed RSS/Atom feeds. Only save or delete when the user clearly asks; recall when past preferences, links, or facts are relevant.",
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['remember', 'recall', 'forget'] },
-        text: { type: 'string', description: 'Fact/preference to remember, or query/ID to recall or forget.' },
+        kind: {
+          type: 'string',
+          enum: ['fact', 'bookmark', 'feed'],
+          description: 'Defaults to fact when omitted.',
+        },
+        text: { type: 'string', description: 'Fact to remember, URL to bookmark or follow, or a query/ID to recall or forget. Bookmarks may append a title after the URL.' },
       },
       required: ['action', 'text'],
       additionalProperties: false,

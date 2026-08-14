@@ -179,21 +179,23 @@ Core agent commands:
 - `/action approve <action-id> <nonce>` / `/action deny <action-id>` — owner-only
 - `/box enable` — owner-only binding of Box to the current numeric group ID
 
-Noun-shaped features use subcommands rather than a command per verb, following
-the same pattern as `/agent`:
+There are twelve commands in total, because a command only earns a slot when
+the model cannot or should not make the call itself — Telegram protocol, an
+authorization boundary, an explicit override of the router, or control of work
+already in flight:
 
-- `/remind <when> <text>` · `/remind list` · `/remind rm <id>`
-- `/digest <schedule> <mode> [query]` · `/digest list` · `/digest rm <id>`
-- `/feed <url>` · `/feed follow <url>` · `/feed list` · `/feed rm <id>`
-- `/bookmark <url> [title]` · `/bookmark list` · `/bookmark rm <id>`
-- `/groupprofile` · `/groupprofile set|add|clear`
+`/start` `/help` `/new` `/model` `/settings` `/box` `/agent` `/quick`
+`/artifact` `/action` `/cancel` `/img`
 
-The bare form is always the primary action, so `/remind in 20m water` needs no
-keyword. Retired names such as `/unremind` reply with their replacement rather
-than failing.
+Everything else is conversational. Arithmetic, unit conversion, times, dates,
+weather, currency, stocks, GitHub, arXiv, Wikipedia, web search, reading a
+link, deep research, reminders, digests, bookmarks, feeds, and durable memory
+are all tools the model already carries, so they are reached by asking rather
+than by remembering a command name. Status, usage, schedules, saved links, and
+memory are tabs in the Mini App on the menu button.
 
-Run `/help` for chat, search, memory, utility, audio, reminder, and digest
-commands.
+Retired command names reply with where the capability went instead of failing,
+so `/unremind` and `/calc` still explain themselves.
 
 ## Documentation
 

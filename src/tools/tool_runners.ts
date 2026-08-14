@@ -2,7 +2,13 @@ import { Message, ToolCall } from '../api/chat_types';
 import type EODHDAPI from '../api/eodhd';
 import type WikipediaAPI from '../api/wikipedia';
 import type YahooFinanceAPI from '../api/yahoo_finance';
-import { calculateExpression, formatNumber } from '../utils/deterministic_tools';
+import {
+  calculateDate,
+  calculateExpression,
+  convertUnits,
+  formatNumber,
+  formatTimeInZone,
+} from '../utils/deterministic_tools';
 import { convertCurrency, getGitHubRepository, getWeather, searchArxiv } from '../utils/structured_utilities';
 
 /**
@@ -36,11 +42,27 @@ function describeError(error: unknown, fallback: string): string {
 }
 
 export async function runCalculatorTool(toolCall: ToolCall): Promise<Message> {
-  const { expression } = parseToolArguments<{ expression?: string }>(toolCall);
+  const { expression, operation } = parseToolArguments<{
+    expression?: string;
+    operation?: string;
+  }>(toolCall);
   const trimmed = expression?.trim();
   if (!trimmed) return toolFailure(toolCall, 'Calculator', 'Missing expression.');
   try {
-    return toolSuccess(toolCall, `${trimmed} = ${formatNumber(calculateExpression(trimmed))}`);
+    switch (operation) {
+      case 'convert': {
+        const converted = convertUnits(trimmed);
+        return toolSuccess(toolCall, `${trimmed} = ${formatNumber(converted.value)} ${converted.to}`);
+      }
+      case 'time':
+        return toolSuccess(toolCall, `${trimmed}: ${formatTimeInZone(trimmed)}`);
+      case 'date':
+        return toolSuccess(toolCall, calculateDate(trimmed));
+      // `arithmetic` and an omitted operation are the same path, so a model
+      // that ignores the enum still gets the previous behaviour.
+      default:
+        return toolSuccess(toolCall, `${trimmed} = ${formatNumber(calculateExpression(trimmed))}`);
+    }
   } catch (error) {
     return toolFailure(toolCall, 'Calculator', describeError(error, 'Calculation failed.'));
   }

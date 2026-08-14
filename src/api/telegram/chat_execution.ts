@@ -1190,9 +1190,10 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
       try {
         return JSON.parse(toolCall.function.arguments || "{}") as {
           query?: string;
+          depth?: string;
         };
       } catch {
-        return {} as { query?: string };
+        return {} as { query?: string; depth?: string };
       }
     })();
     const query = parsedArgs.query?.trim();
@@ -1201,6 +1202,15 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
     }
 
     try {
+      // The retired /research command was the only entry point to the
+      // multi-query flow; `depth: "deep"` keeps it reachable.
+      if (parsedArgs.depth === "deep") {
+        return {
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: await this.research(sessionKey, query),
+        };
+      }
       const response = await searchBroker.search(query);
       await this.saveLastSources(sessionKey, response);
       const results = formatSearchResponseForModel(response, 3_500);
@@ -1325,10 +1335,15 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
   ): Promise<Message> {
     const args = parseToolArguments<{
       action?: string;
+      kind?: string;
       schedule?: string;
       text?: string;
       id?: string;
     }>(toolCall);
+    // Reminders and digests share the scheduler, so they share this runner.
+    // An omitted `kind` keeps the original reminder behaviour.
+    const digest = args.kind === "digest";
+    const label = digest ? "Digest action" : "Reminder action";
     try {
       if (args.action === "create") {
         const schedule = args.schedule?.trim();
@@ -1336,38 +1351,36 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
         if (!schedule || !text)
           return toolFailure(
             toolCall,
-            "Reminder action",
+            label,
             "Create requires schedule and text.",
           );
         return toolSuccess(
           toolCall,
-          await this.addReminder(chatId, sessionKey, `${schedule} ${text}`),
+          digest
+            ? await this.addDigest(chatId, sessionKey, `${schedule} ${text}`)
+            : await this.addReminder(chatId, sessionKey, `${schedule} ${text}`),
         );
       }
       if (args.action === "list") {
+        const listed = digest
+          ? await this.listDigests(sessionKey)
+          : await this.listReminders(sessionKey);
         return toolSuccess(
           toolCall,
-          (await this.listReminders(sessionKey)) ||
-            "No reminders are scheduled.",
+          listed || `No ${digest ? "digests" : "reminders"} are scheduled.`,
         );
       }
       if (args.action === "cancel") {
         if (!args.id?.trim())
-          return toolFailure(
-            toolCall,
-            "Reminder action",
-            "Cancel requires a reminder ID.",
-          );
-        const removed = await this.removeReminder(sessionKey, args.id);
+          return toolFailure(toolCall, label, "Cancel requires an ID.");
+        const removed = digest
+          ? await this.removeDigest(sessionKey, args.id)
+          : await this.removeReminder(sessionKey, args.id);
         return removed
-          ? toolSuccess(toolCall, `Cancelled reminder ${args.id}: ${removed}`)
-          : toolFailure(
-              toolCall,
-              "Reminder action",
-              `No reminder found with ID ${args.id}.`,
-            );
+          ? toolSuccess(toolCall, `Cancelled ${args.id}: ${removed}`)
+          : toolFailure(toolCall, label, `Nothing found with ID ${args.id}.`);
       }
-      return toolFailure(toolCall, "Reminder action", "Unknown action.");
+      return toolFailure(toolCall, label, "Unknown action.");
     } catch (error) {
       return toolFailure(
         toolCall,
@@ -1381,44 +1394,64 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
     toolCall: ToolCall,
     sessionKey: string,
   ): Promise<Message> {
-    const args = parseToolArguments<{ action?: string; text?: string }>(
-      toolCall,
-    );
+    const args = parseToolArguments<{
+      action?: string;
+      kind?: string;
+      text?: string;
+    }>(toolCall);
     const text = args.text?.trim();
-    if (!text)
-      return toolFailure(
-        toolCall,
-        "Memory action",
-        "Missing memory text or query.",
-      );
+    // Bookmarks and feeds are saved-for-later state alongside durable facts.
+    // An omitted `kind` keeps the original fact behaviour.
+    const kind = args.kind === "bookmark" || args.kind === "feed" ? args.kind : "fact";
+    const label =
+      kind === "bookmark" ? "Bookmark action" : kind === "feed" ? "Feed action" : "Memory action";
+    if (!text) return toolFailure(toolCall, label, "Missing text or query.");
     try {
       if (args.action === "remember") {
+        if (kind === "bookmark") {
+          const [url, ...titleParts] = text.split(/\s+/);
+          await this.addBookmark(sessionKey, url, titleParts.join(" "));
+          return toolSuccess(toolCall, `Saved bookmark: ${url}`);
+        }
+        if (kind === "feed") {
+          return toolSuccess(
+            toolCall,
+            `Following feed ${await this.addFeedSubscription(sessionKey, text)}.`,
+          );
+        }
         const id = await this.rememberDurableMemory(sessionKey, text);
         return toolSuccess(toolCall, `Saved durable memory ${id}.`);
       }
       if (args.action === "recall") {
-        return toolSuccess(
-          toolCall,
-          (await this.recallDurableMemory(sessionKey, text)) ||
-            "No matching durable memory found.",
-        );
+        const listed =
+          kind === "bookmark"
+            ? await this.listBookmarks(sessionKey)
+            : kind === "feed"
+              ? await this.listFeedSubscriptions(sessionKey)
+              : await this.recallDurableMemory(sessionKey, text);
+        return toolSuccess(toolCall, listed || `Nothing saved under ${kind}.`);
       }
       if (args.action === "forget") {
-        const removed = await this.forgetSavedMemory(sessionKey, text);
+        const removed =
+          kind === "bookmark"
+            ? await this.removeBookmark(sessionKey, text)
+            : kind === "feed"
+              ? await this.removeFeedSubscription(sessionKey, text)
+              : await this.forgetSavedMemory(sessionKey, text);
         return removed
           ? toolSuccess(toolCall, `Forgot ${removed}.`)
           : toolFailure(
               toolCall,
-              "Memory action",
-              "No single matching memory found. Ask the user to identify the exact memory or ID.",
+              label,
+              "No single match found. Ask the user to identify the exact item or ID.",
             );
       }
-      return toolFailure(toolCall, "Memory action", "Unknown action.");
+      return toolFailure(toolCall, label, "Unknown action.");
     } catch (error) {
       return toolFailure(
         toolCall,
-        "Memory action",
-        error instanceof Error ? error.message : "Memory action failed.",
+        label,
+        error instanceof Error ? error.message : "Action failed.",
       );
     }
   }

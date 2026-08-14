@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   buildMenuScopePlans,
   GROUP_ONLY_COMMANDS,
-  MINIAPP_ABSORBED_COMMANDS,
   OWNER_ONLY_COMMANDS,
   type MenuCommand,
 } from './menu_scope';
@@ -21,6 +20,26 @@ function plan(scopeType: string, overrides: Parameters<typeof buildMenuScopePlan
   return found ? found.commands.map(command => command.name) : null;
 }
 
+describe('command surface', () => {
+  // The whole point of the reduction: a bot whose menu fits on one screen.
+  it('stays small enough to read at a glance', () => {
+    expect(ALL.length).toBeLessThanOrEqual(12);
+  });
+
+  it('keeps only commands the model cannot or should not decide itself', () => {
+    expect(ALL.map(c => c.name).sort()).toEqual([
+      'action', 'agent', 'artifact', 'box', 'cancel', 'help',
+      'img', 'model', 'new', 'quick', 'settings', 'start',
+    ]);
+  });
+
+  it('gives every command a description', () => {
+    for (const command of ALL) {
+      expect(command.description, `${command.name} has no description`).toBeTruthy();
+    }
+  });
+});
+
 describe('buildMenuScopePlans', () => {
   it('covers default, private, and group scopes', () => {
     const plans = buildMenuScopePlans({ commands: ALL });
@@ -28,15 +47,6 @@ describe('buildMenuScopePlans', () => {
     expect(plans.map(p => p.scope.type)).toEqual([
       'all_private_chats', 'all_group_chats', 'default',
     ]);
-  });
-
-  it('withholds Mini App commands from every scope', () => {
-    for (const scope of ['all_private_chats', 'all_group_chats', 'default', 'chat_member']) {
-      const names = plan(scope)!;
-      for (const absorbed of MINIAPP_ABSORBED_COMMANDS) {
-        expect(names, `${absorbed} leaked into ${scope}`).not.toContain(absorbed);
-      }
-    }
   });
 
   it('keeps owner-only commands out of the member menus', () => {
@@ -92,31 +102,19 @@ describe('buildMenuScopePlans', () => {
     })).toHaveLength(4);
   });
 
-  it('meaningfully shrinks what a group member sees', () => {
-    const member = plan('all_group_chats')!;
-
-    expect(member.length).toBeLessThan(ALL.length);
-    expect(ALL.length - member.length)
-      .toBe(MINIAPP_ABSORBED_COMMANDS.size + countOwnerOnlyNotAbsorbed());
-  });
-
   it('leaves conversational commands in every menu', () => {
     for (const scope of ['all_private_chats', 'all_group_chats', 'default']) {
       expect(plan(scope)).toContain('help');
       expect(plan(scope)).toContain('new');
-      expect(plan(scope)).toContain('switchmodel');
+      expect(plan(scope)).toContain('model');
     }
   });
 });
 
-function countOwnerOnlyNotAbsorbed(): number {
-  return [...OWNER_ONLY_COMMANDS].filter(name => !MINIAPP_ABSORBED_COMMANDS.has(name)).length;
-}
-
-describe('absorbed command coverage', () => {
-  it('only names commands that actually exist', () => {
+describe('scope sets', () => {
+  it('only name commands that actually exist', () => {
     const names = new Set(ALL.map(command => command.name));
-    for (const set of [MINIAPP_ABSORBED_COMMANDS, OWNER_ONLY_COMMANDS, GROUP_ONLY_COMMANDS]) {
+    for (const set of [OWNER_ONLY_COMMANDS, GROUP_ONLY_COMMANDS]) {
       for (const name of set) {
         expect(names, `${name} is listed but is not a registered command`).toContain(name);
       }

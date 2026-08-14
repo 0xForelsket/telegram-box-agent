@@ -114,22 +114,43 @@ describe('RETIRED_COMMAND_HINTS', () => {
     }
   });
 
-  it('points every retired name at a command that does exist', () => {
+  // Most hints now point at plain language or the menu button rather than
+  // another command; only the ones that name a command need to resolve.
+  it('points every command-shaped hint at a command that exists', () => {
     const live = new Set(commands.map(command => command.name));
 
     for (const [retired, replacement] of Object.entries(RETIRED_COMMAND_HINTS)) {
-      const target = replacement.split(/\s+/)[0].replace(/^\//, '');
-      expect(live, `${retired} points at missing ${target}`).toContain(target);
+      if (!replacement.startsWith('/')) continue;
+      const target = replacement.split(/\s+/)[0].slice(1);
+      expect(live, `${retired} points at missing /${target}`).toContain(target);
     }
   });
 
-  it('covers every command name the consolidation removed', () => {
+  it('gives every retired name a non-empty hint', () => {
+    for (const [retired, replacement] of Object.entries(RETIRED_COMMAND_HINTS)) {
+      expect(replacement.trim(), `${retired} has an empty hint`).toBeTruthy();
+    }
+  });
+
+  it('covers every command name the reduction removed', () => {
     for (const removed of [
-      'bookmarks', 'unbookmark', 'reminders', 'unremind', 'digests', 'undigest',
-      'followfeed', 'feeds', 'unfollowfeed',
-      'setgroupprofile', 'addgroupprofile', 'cleargroupprofile',
+      // Folded into a survivor.
+      'switchmodel', 'flux', 'setambient', 'setreplystyle', 'dashboard',
+      'groupprofile', 'setgroupprofile', 'addgroupprofile', 'cleargroupprofile',
+      // Now reachable by asking.
+      'calc', 'convert', 'time', 'date', 'weather', 'currency', 'github',
+      'arxiv', 'read', 'research', 'remind', 'reminders', 'unremind',
+      'digest', 'digests', 'undigest', 'bookmark', 'bookmarks', 'unbookmark',
+      'feed', 'followfeed', 'feeds', 'unfollowfeed',
+      'remember', 'recall', 'forget', 'translate', 'rewrite', 'summarize',
+      'compare', 'speak',
+      // Now in the Mini App.
+      'status', 'usage', 'cache', 'history', 'memory', 'people', 'topics',
+      'sources',
+      // Gone entirely.
+      'synccommands',
     ]) {
-      expect(RETIRED_COMMAND_HINTS).toHaveProperty(removed);
+      expect(RETIRED_COMMAND_HINTS, `${removed} has no hint`).toHaveProperty(removed);
     }
   });
 });

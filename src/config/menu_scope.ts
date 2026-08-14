@@ -1,61 +1,31 @@
 /**
  * Which commands appear in Telegram's registered menu, and to whom.
  *
- * Two separate reductions live here:
- *
- * 1. Commands the Mini App renders as UI are withheld from the menu. They still
- *    work when typed — this only stops them occupying a row in a list nobody
- *    can scan. Withholding is not deprecation.
- * 2. Owner-only and group-only commands are registered against narrower
- *    Telegram scopes, so members never see a command that will refuse them and
- *    private chats never see one that only works in the bound group.
+ * The surface is now small enough that hiding commands matters far less than
+ * it did — the previous absorbed-command list is gone because those commands
+ * were removed outright rather than withheld. What remains is scoping: members
+ * never see a command that will refuse them, and private chats never see one
+ * that only works in the bound group.
  */
 
 /**
- * Bump whenever the scoping rules or absorbed set below change.
+ * Bump whenever the scoping rules below change.
  *
  * The stale-menu fingerprint hashes command names and descriptions, so a change
- * to *which scope* a command lands in is invisible to it. Without this the menu
- * would keep serving the previous split until an unrelated command changed.
+ * to *which scope* a command lands in is invisible to it.
  */
-export const MENU_SCHEMA_VERSION = 3;
-
-/**
- * Rendered as tabs in the Mini App; typing them still works.
- *
- * The list *legs* of the consolidated families are no longer commands at all —
- * they are `/remind list`, `/feed list` and so on — so only genuinely
- * standalone read-only commands remain here.
- */
-export const MINIAPP_ABSORBED_COMMANDS = new Set([
-  'status',
-  'usage',
-  'cache',
-  'people',
-  'topics',
-  'memory',
-  'sources',
-  'history',
-]);
+export const MENU_SCHEMA_VERSION = 4;
 
 /** Refuse for anyone but `OWNER_USER_ID`. */
-export const OWNER_ONLY_COMMANDS = new Set([
-  'box',
-  'action',
-  'usage',
-  'cache',
-  'dashboard',
-  'synccommands',
-]);
+export const OWNER_ONLY_COMMANDS = new Set(['box', 'action']);
 
-/** Require the bound Telegram group; they throw in a private chat. */
+/** Require the bound Telegram group; they refuse in a private chat. */
 export const GROUP_ONLY_COMMANDS = new Set([
   'box',
   'agent',
   'quick',
   'artifact',
   'action',
-  'groupprofile',
 ]);
 
 export interface MenuCommand {
@@ -75,7 +45,7 @@ export interface MenuScopePlan {
  * Deliberately a small number of static scopes rather than one per user: an
  * earlier implementation scanned the keyspace and issued a `setMyCommands` call
  * per user, which grew a subrequest per user on a single invocation. Roles are
- * bounded, so this is at most three calls regardless of how many people use the
+ * bounded, so this is at most four calls regardless of how many people use the
  * bot.
  */
 export function buildMenuScopePlans(input: {
@@ -83,8 +53,9 @@ export function buildMenuScopePlans(input: {
   ownerUserId?: string;
   boundChatId?: number | null;
 }): MenuScopePlan[] {
-  const visible = input.commands.filter(command => !MINIAPP_ABSORBED_COMMANDS.has(command.name));
-  const member = visible.filter(command => !OWNER_ONLY_COMMANDS.has(command.name));
+  const member = input.commands.filter(
+    command => !OWNER_ONLY_COMMANDS.has(command.name),
+  );
 
   const plans: MenuScopePlan[] = [
     {
@@ -101,7 +72,7 @@ export function buildMenuScopePlans(input: {
   if (input.ownerUserId && input.boundChatId != null) {
     plans.push({
       scope: { type: 'chat_member', chat_id: input.boundChatId, user_id: Number(input.ownerUserId) },
-      commands: visible,
+      commands: input.commands,
     });
   }
 
