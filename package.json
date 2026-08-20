@@ -47,10 +47,10 @@
     "snapshot:verify": "node --env-file=.dev.vars scripts/verify-box-snapshot.mjs"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260813.1",
+    "@cloudflare/workers-types": "^5.20260817.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
-    "wrangler": "^4.122.0"
+    "wrangler": "^4.123.0"
   },
   "dependencies": {
     "@upstash/box": "0.6.3",
