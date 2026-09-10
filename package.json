@@ -58,7 +58,7 @@
     "wrangler": "^4.122.0"
   },
   "dependencies": {
-    "@upstash/box": "0.6.3",
-    "jose": "6.2.8"
+    "@upstash/box": "0.7.3",
+    "jose": "6.2.12"
   }
 }
