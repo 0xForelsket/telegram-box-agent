@@ -48,14 +48,14 @@
     "snapshot:verify": "node --env-file=.dev.vars scripts/verify-box-snapshot.mjs"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260813.1",
-    "@types/node": "^22.20.2",
-    "esbuild": "0.28.1",
+    "@cloudflare/workers-types": "^5.20260907.1",
+    "@types/node": "^26.4.1",
+    "esbuild": "0.28.2",
     "fengari": "^0.1.5",
     "miniflare": "5.20260811.0-alpha",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
-    "wrangler": "^4.122.0"
+    "vitest": "^5.0.0",
+    "wrangler": "^4.129.0"
   },
   "dependencies": {
     "@upstash/box": "0.6.3",
