@@ -139,7 +139,7 @@ describe('SearchBroker', () => {
         sources: [{ title: 'Fallback', url: 'https://example.com/fallback' }],
       });
       const search = new SearchBroker([slow, provider('fallback', fallback)], redisMock()).search('topic');
-      await vi.advanceTimersByTimeAsync(15_001);
+      await vi.advanceTimersByTimeAsync(30_001);
       await expect(search).resolves.toMatchObject({ provider: 'fallback' });
       expect(fallback).toHaveBeenCalledOnce();
     } finally {

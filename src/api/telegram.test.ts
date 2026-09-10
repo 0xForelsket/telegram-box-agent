@@ -108,15 +108,16 @@ describe('TelegramBot model picker', () => {
       OPENAI_API_KEY: 'openai-key',
       OPENAI_MODELS: 'vision-test',
       VISION_MODEL: 'auto',
-      VISION_MODELS: 'gemini-test,vision-test',
-      OPENAI_COMPATIBLE_MODELS: 'deepseek-v4-pro',
+      VISION_MODELS: 'deepseek-v4-flash-vision-exp,gemini-test,vision-test',
+      OPENAI_COMPATIBLE_MODELS: 'deepseek-v4-flash-vision-exp,deepseek-v4-pro',
     }));
     const getRoleModel = (bot as unknown as {
       getRoleModel(role: 'vision', fallback: string): string;
     }).getRoleModel.bind(bot);
 
+    expect(getRoleModel('vision', 'deepseek-v4-flash-vision-exp')).toBe('deepseek-v4-flash-vision-exp');
     expect(getRoleModel('vision', 'vision-test')).toBe('vision-test');
-    expect(getRoleModel('vision', 'deepseek-v4-pro')).toBe('gemini-test');
+    expect(getRoleModel('vision', 'deepseek-v4-pro')).toBe('deepseek-v4-flash-vision-exp');
   });
 });
 
@@ -882,16 +883,89 @@ describe('TelegramBot callback handling', () => {
   it('preserves webhook update deduplication across Telegram retries', async () => {
     const bot = new TelegramBot(createEnv());
     const internals = bot as unknown as {
-      markUpdateAsProcessed(updateId: number): Promise<boolean>;
+      claimUpdate(updateId: number): Promise<'claimed' | 'processing' | 'completed'>;
+      completeUpdate(updateId: number): Promise<void>;
       handleUpdate(update: TelegramTypes.Update): Promise<void>;
     };
-    vi.spyOn(internals, 'markUpdateAsProcessed').mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    vi.spyOn(internals, 'claimUpdate').mockResolvedValueOnce('claimed').mockResolvedValueOnce('completed');
+    vi.spyOn(internals, 'completeUpdate').mockResolvedValue(undefined);
     const handle = vi.spyOn(internals, 'handleUpdate').mockResolvedValue(undefined);
     const update = createPrivateMessageUpdate(77, 'hello');
 
     await bot.handleWebhook(webhookRequest(update));
     await bot.handleWebhook(webhookRequest(update));
     expect(handle).toHaveBeenCalledOnce();
+  });
+
+  it('asks Telegram to retry an update that is still processing', async () => {
+    const bot = new TelegramBot(createEnv());
+    const internals = bot as unknown as {
+      claimUpdate(updateId: number): Promise<'claimed' | 'processing' | 'completed'>;
+      handleUpdate(update: TelegramTypes.Update): Promise<void>;
+    };
+    vi.spyOn(internals, 'claimUpdate').mockResolvedValue('processing');
+    const handle = vi.spyOn(internals, 'handleUpdate').mockResolvedValue(undefined);
+
+    const response = await bot.handleWebhook(
+      webhookRequest(createPrivateMessageUpdate(770, 'hello')),
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('Retry-After')).toBe('2');
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  it('does not acknowledge Telegram before the update finishes', async () => {
+    let finishUpdate!: () => void;
+    const pendingUpdate = new Promise<void>((resolve) => {
+      finishUpdate = resolve;
+    });
+    const ctx = {
+      waitUntil: vi.fn(),
+    } as unknown as ExecutionContext;
+    const bot = new TelegramBot(createEnv(), ctx);
+    const internals = bot as unknown as {
+      claimUpdate(updateId: number): Promise<'claimed' | 'processing' | 'completed'>;
+      completeUpdate(updateId: number): Promise<void>;
+      handleUpdate(update: TelegramTypes.Update): Promise<void>;
+    };
+    vi.spyOn(internals, 'claimUpdate').mockResolvedValue('claimed');
+    vi.spyOn(internals, 'completeUpdate').mockResolvedValue(undefined);
+    vi.spyOn(internals, 'handleUpdate').mockReturnValue(pendingUpdate);
+
+    let acknowledged = false;
+    const responsePromise = bot
+      .handleWebhook(webhookRequest(createPrivateMessageUpdate(771, 'hello')))
+      .then((response) => {
+        acknowledged = true;
+        return response;
+      });
+
+    await Promise.resolve();
+    expect(acknowledged).toBe(false);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+
+    finishUpdate();
+    expect((await responsePromise).status).toBe(200);
+  });
+
+  it('releases the update claim when processing fails so Telegram can retry', async () => {
+    const bot = new TelegramBot(createEnv());
+    const internals = bot as unknown as {
+      claimUpdate(updateId: number): Promise<'claimed' | 'processing' | 'completed'>;
+      handleUpdate(update: TelegramTypes.Update): Promise<void>;
+      redis: { del(key: string): Promise<void> };
+    };
+    vi.spyOn(internals, 'claimUpdate').mockResolvedValue('claimed');
+    vi.spyOn(internals, 'handleUpdate').mockRejectedValue(new Error('worker interrupted'));
+    const release = vi.spyOn(internals.redis, 'del').mockResolvedValue(undefined);
+
+    const response = await bot.handleWebhook(
+      webhookRequest(createPrivateMessageUpdate(772, 'hello')),
+    );
+
+    expect(response.status).toBe(500);
+    expect(release).toHaveBeenCalledWith('processed_update:772');
   });
 
   it('rejects a webhook carrying no secret token', async () => {

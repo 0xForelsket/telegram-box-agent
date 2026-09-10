@@ -34,7 +34,11 @@ describe('ExaSearchAPI contract', () => {
       title: 'Result', url: 'https://example.com/a', publishedAt: '2026-08-01', author: 'Author', snippet: 'useful snippet',
     }]);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(body).toMatchObject({ query: 'chips site:example.com', numResults: 3 });
+    expect(body).toMatchObject({
+      query: 'chips site:example.com',
+      numResults: 3,
+      contents: { highlights: { query: 'chips', maxCharacters: 1_200 } },
+    });
     // fetchJson combines the caller's signal with its own timeout backstop, so
     // the forwarded signal is no longer identity-equal to the one passed in.
     // What matters is that caller cancellation still reaches fetch.

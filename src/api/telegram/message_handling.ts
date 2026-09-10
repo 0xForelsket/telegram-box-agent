@@ -466,12 +466,10 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
             // this the rejection reached `handleWebhook`, which only logs, so a
             // failing command produced complete silence in the chat.
             console.error(`Error in /${commandName}:`, error);
-            this.runBackground("notifyCommandError", async () => {
-              await this.sendMessageWithFallback(
-                chatId,
-                this.getUserFacingErrorMessage(error),
-              );
-            });
+            await this.sendMessageWithFallback(
+              chatId,
+              this.getUserFacingErrorMessage(error),
+            );
           }
         } else {
           try {
@@ -579,12 +577,10 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
             }
           } catch (error) {
             console.error("Error in handleUpdate:", error);
-            this.runBackground("notifyHandleUpdateError", async () => {
-              await this.sendMessageWithFallback(
-                chatId,
-                this.getUserFacingErrorMessage(error),
-              );
-            });
+            await this.sendMessageWithFallback(
+              chatId,
+              this.getUserFacingErrorMessage(error),
+            );
           }
         }
       }
@@ -965,19 +961,43 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
     return `processed_update:${updateId}`;
   }
 
-  protected async markUpdateAsProcessed(updateId: number): Promise<boolean> {
+  protected async claimUpdate(
+    updateId: number,
+  ): Promise<"claimed" | "processing" | "completed"> {
     try {
-      return await this.redis.setIfNotExists(
+      const claimed = await this.redis.setIfNotExists(
         this.getProcessedUpdateKey(updateId),
-        "1",
+        "processing",
         TelegramBotBase.PROCESSED_UPDATE_TTL_SECONDS,
       );
+      if (claimed) return "claimed";
+
+      const state = await this.redis.get(this.getProcessedUpdateKey(updateId));
+      // "1" is the completed marker used by versions deployed before the
+      // processing/completed distinction was introduced.
+      return state === "completed" || state === "1"
+        ? "completed"
+        : "processing";
     } catch (error) {
       console.error(
         "Redis update deduplication unavailable; processing update in degraded mode:",
         error,
       );
-      return true;
+      return "claimed";
+    }
+  }
+
+  protected async completeUpdate(updateId: number): Promise<void> {
+    try {
+      await this.redis.set(
+        this.getProcessedUpdateKey(updateId),
+        "completed",
+        TelegramBotBase.PROCESSED_UPDATE_TTL_SECONDS,
+      );
+    } catch (error) {
+      // The reply has already been delivered. Returning an error here would
+      // make Telegram repeat a successful update and could duplicate replies.
+      console.error("Failed to persist completed webhook update:", error);
     }
   }
 
@@ -1076,26 +1096,41 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
       return new Response("Forbidden", { status: 403 });
     }
 
+    let claimedUpdateId: number | undefined;
     try {
       const update: TelegramTypes.Update = await request.json();
-      const shouldProcess = await this.markUpdateAsProcessed(update.update_id);
-      if (!shouldProcess) {
+      const claim = await this.claimUpdate(update.update_id);
+      if (claim === "completed") {
         return new Response("OK", { status: 200 });
       }
-
-      const processUpdate = this.handleUpdate(update).catch((error) => {
-        console.error("Error processing webhook:", error);
-      });
-
-      if (this.ctx) {
-        this.ctx.waitUntil(processUpdate);
-      } else {
-        await processUpdate;
+      if (claim === "processing") {
+        return new Response("Update Still Processing", {
+          status: 503,
+          headers: { "Retry-After": "2" },
+        });
       }
+      claimedUpdateId = update.update_id;
+
+      // Do not acknowledge Telegram until the user-visible work has finished.
+      // Work scheduled with waitUntil after returning HTTP 200 only receives a
+      // limited post-response grace period. A slow model/tool call could be
+      // terminated after Telegram had stopped retrying, leaving the user with
+      // no reply while the update remained marked as processed.
+      await this.handleUpdate(update);
+      await this.completeUpdate(update.update_id);
 
       return new Response("OK", { status: 200 });
     } catch (error) {
       console.error("Error processing webhook:", error);
+      if (claimedUpdateId !== undefined) {
+        // Permit Telegram to retry a failed attempt. The claim is only durable
+        // after handleUpdate, including any user-facing error reply, succeeds.
+        await this.redis
+          .del(this.getProcessedUpdateKey(claimedUpdateId))
+          .catch((cleanupError) => {
+            console.error("Failed to release webhook update claim:", cleanupError);
+          });
+      }
       return new Response("Internal Server Error", { status: 500 });
     }
   }

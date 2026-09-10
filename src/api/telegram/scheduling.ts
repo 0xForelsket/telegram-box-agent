@@ -775,7 +775,7 @@ export abstract class TelegramSchedulingBot extends TelegramChatExecutionBot {
     } else if (mode === "search") {
       body = formatSearchResponseForModel(
         await this.createSearchBroker().search(job.payload.query || "", 5),
-        3_500,
+        5_000,
       );
     } else if (mode === "stock") {
       body = await new YahooFinanceAPI().lookupStockQuote(

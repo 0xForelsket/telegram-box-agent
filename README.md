@@ -259,6 +259,9 @@ external services.
   default, and an empty repository allowlist permits nothing.
 - Vision requests inline image bytes rather than passing a Telegram file URL to
   a provider, so the bot token is never disclosed to a model host.
+- The default Telegram chat model is DeepSeek's experimental vision-capable
+  `deepseek-v4-flash-vision-exp`; ordinary image messages stay on that selected
+  model, with Gemini Flash Lite retained as a vision fallback.
 - URL fetching rejects private, loopback, link-local, metadata, and reserved
   addresses, including IPv4 smuggled inside IPv6. This is defence in depth: a
   Worker resolves DNS inside `fetch`, so a public hostname pointing at an

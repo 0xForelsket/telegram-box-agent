@@ -48,7 +48,8 @@ class ExaSearchAPI implements SearchProvider {
           } : {}),
           contents: {
             highlights: {
-              maxCharacters: 900,
+              query: query.normalized,
+              maxCharacters: 1_200,
             },
           },
         }),

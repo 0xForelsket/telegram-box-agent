@@ -1213,7 +1213,7 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
       }
       const response = await searchBroker.search(query);
       await this.saveLastSources(sessionKey, response);
-      const results = formatSearchResponseForModel(response, 3_500);
+      const results = formatSearchResponseForModel(response, 5_000);
       return {
         role: "tool",
         tool_call_id: toolCall.id,
@@ -1851,7 +1851,7 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
       );
     await this.assertCurrentTaskActive(sessionKey);
     const searchEvidence = responses.map((response) =>
-      formatSearchResponseForModel(response, 4_000),
+      formatSearchResponseForModel(response, 6_000),
     );
     const combinedResponse: SearchResponse = {
       provider: [

@@ -368,7 +368,10 @@ export abstract class TelegramBotBase implements TelegramCommandBot {
 
   protected abstract getProcessedUpdateKey(updateId: number): string;
 
-  protected abstract markUpdateAsProcessed(updateId: number): Promise<boolean>;
+  protected abstract claimUpdate(
+    updateId: number,
+  ): Promise<"claimed" | "processing" | "completed">;
+  protected abstract completeUpdate(updateId: number): Promise<void>;
 
   protected abstract getSummaryModel(currentModel: string): string;
 

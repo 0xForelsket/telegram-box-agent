@@ -17,7 +17,7 @@ interface CachedSearchRecord {
 }
 
 export class SearchBroker {
-  private static readonly PROVIDER_TIMEOUT_MS = 15_000;
+  private static readonly PROVIDER_TIMEOUT_MS = 30_000;
 
   constructor(
     private readonly providers: SearchProvider[],
