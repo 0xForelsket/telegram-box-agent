@@ -1,5 +1,6 @@
 import { Env, getConfig } from '../env';
 import { globalFetch } from './helpers';
+import { executionSignal } from '../runtime/execution';
 
 type AppConfig = ReturnType<typeof getConfig>;
 
@@ -63,6 +64,7 @@ export class RedisClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(args),
+      signal: executionSignal(undefined, 5_000),
     });
 
     if (!response.ok) {
@@ -84,6 +86,7 @@ export class RedisClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(commands),
+      signal: executionSignal(undefined, 5_000),
     });
 
     if (!response.ok) {
@@ -101,6 +104,10 @@ export class RedisClient {
 
   async get(key: string): Promise<string | null> {
     return (await this.command<string | null>(['GET', key])) ?? null;
+  }
+
+  async eval<T>(script: string, keys: string[], args: (string | number)[]): Promise<T> {
+    return this.command<T>(['EVAL', script, keys.length, ...keys, ...args]);
   }
 
   async getMany(keys: string[]): Promise<Array<string | null>> {

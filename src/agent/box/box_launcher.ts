@@ -46,6 +46,7 @@ export interface BoxCompletionWebhook {
 }
 
 export interface LaunchPiBoxJobInput {
+  onCreated?: (boxId: string) => Promise<void>;
   jobId: string;
   prompt: string;
   boxApiKey: string;
@@ -228,6 +229,7 @@ export async function launchPiBoxJob(input: LaunchPiBoxJobInput): Promise<Launch
 
   let accepted = false;
   try {
+    await input.onCreated?.(box.id);
     if (!input.snapshotId?.trim()) {
       await box.exec.command(
         `cd /workspace/home && npm install --no-save --silent --ignore-scripts @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} @earendil-works/pi-ai@${PI_AI_VERSION}`,

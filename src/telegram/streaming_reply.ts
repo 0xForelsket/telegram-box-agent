@@ -1,4 +1,5 @@
 import { TelegramTransport } from './transport';
+import { hasDeferredReply } from '../runtime/execution';
 
 type StreamingMode = 'unknown' | 'native' | 'edit' | 'disabled';
 
@@ -51,6 +52,9 @@ export class TelegramStreamingReply {
       this.lastSentAt = Date.now();
       this.lastSentLength = preview.length;
     } catch (error) {
+      // Durable execution delivers the final answer from its saved outbox.
+      // A persistent preview would leave a second message behind after recovery.
+      if (hasDeferredReply()) { this.mode = 'disabled'; return; }
       if (this.mode !== 'unknown') {
         console.warn('Telegram streaming update failed; final response will be sent normally.', error);
         this.mode = 'disabled';

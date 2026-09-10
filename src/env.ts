@@ -1,4 +1,5 @@
 export interface Env {
+  INBOX_WORKER?: Fetcher;
   OPENAI_API_KEY: string;
   OPENAI_BASE_URL: string;
   OPENAI_MODELS: string;

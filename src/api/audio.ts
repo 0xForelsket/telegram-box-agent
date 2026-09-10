@@ -1,3 +1,4 @@
+import { globalFetch } from "../utils/helpers";
 import { Env, getConfig } from '../env';
 
 export class AudioAPI {
@@ -26,7 +27,7 @@ export class AudioAPI {
     body.append('file', audio, filename);
     body.append('model', this.transcriptionModel);
     body.append('response_format', 'json');
-    const response = await fetch(`${this.baseUrl}/audio/transcriptions`, {
+    const response = await globalFetch(`${this.baseUrl}/audio/transcriptions`, {
       method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}` }, body, signal,
     });
     const text = await response.text();
@@ -46,7 +47,7 @@ export class AudioAPI {
     const input = text.trim();
     if (!input) throw new Error('Provide text to speak.');
     if (input.length > 1_000) throw new Error('Speech text is limited to 1,000 characters.');
-    const response = await fetch(`${this.baseUrl}/audio/speech`, {
+    const response = await globalFetch(`${this.baseUrl}/audio/speech`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: this.ttsModel, voice: this.ttsVoice, input, response_format: 'mp3' }),

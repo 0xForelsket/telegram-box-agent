@@ -300,10 +300,31 @@ export class BoxJobStore {
     payload: WebhookPayload;
     now?: number;
   }): Promise<{ job: BoxJob; duplicate: boolean; late: boolean; approvalNonce?: string }> {
+    return this.complete(input);
+  }
+
+  async recordProvisionedBox(id: string, boxId: string, now = Date.now()): Promise<void> {
+    await this.redis.withLock(`box-job:${id}`, async () => {
+      const job = await this.require(id);
+      if (job.status !== 'provisioning') throw new Error('Box job is no longer provisioning.');
+      await this.save({ ...job, boxId, updatedAt: now });
+    });
+  }
+
+  async reconcileCompletion(jobId: string, payload: WebhookPayload, now = Date.now()): Promise<BoxJob> {
+    return (await this.complete({ jobId, payload, now })).job;
+  }
+
+  private async complete(input: {
+    jobId: string; nonce?: string; payload: WebhookPayload; now?: number;
+  }): Promise<{ job: BoxJob; duplicate: boolean; late: boolean; approvalNonce?: string }> {
     const now = input.now ?? Date.now();
     return await this.redis.withLock(`box-job:${input.jobId}`, async () => {
       const job = await this.require(input.jobId);
-      if (job.callbackNonceHash !== await hashToken(input.nonce)) throw new Error('Box callback nonce mismatch.');
+      if (input.nonce !== undefined && job.callbackNonceHash !== await hashToken(input.nonce)) throw new Error('Box callback nonce mismatch.');
+      if (input.nonce === undefined && (!job.boxId || !job.runId || job.boxId !== input.payload.box_id || job.runId !== input.payload.run_id)) {
+        throw new Error('Reconciliation requires the exact recorded Box and run.');
+      }
       if (job.boxId && job.boxId !== input.payload.box_id) throw new Error('Box callback box ID mismatch.');
       if (job.runId && input.payload.run_id && job.runId !== input.payload.run_id) {
         throw new Error('Box callback run ID mismatch.');

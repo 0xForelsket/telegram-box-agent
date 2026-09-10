@@ -1,3 +1,4 @@
+import { globalFetch } from "../../utils/helpers";
 import { Env, getConfig } from '../../env';
 import { ParsedSearchQuery, SearchProvider, SearchProviderError, SearchResponse, SearchSource } from '../types';
 
@@ -38,7 +39,7 @@ export class GeminiGroundingProvider implements SearchProvider {
       throw new SearchProviderError('GOOGLE_MODEL_KEY is not configured', this.id, false, 'auth');
     }
 
-    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+    const response = await globalFetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

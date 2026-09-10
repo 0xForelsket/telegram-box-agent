@@ -49,6 +49,16 @@ async function createJob(store: BoxJobStore) {
 }
 
 describe('BoxJobStore', () => {
+  it('reconciles only the exact recorded remote run and treats a later callback as a duplicate', async () => {
+    const store = new BoxJobStore(new FakeRedis());
+    const job = await createJob(store);
+    await store.markProvisioning(job.id, 2000);
+    await store.markRunning(job.id, 'box-1', 'run-1', 3000);
+    await expect(store.reconcileCompletion(job.id, { box_id: 'box-1', run_id: 'other', status: 'completed' }, 4000)).rejects.toThrow('exact');
+    const payload = { box_id: 'box-1', run_id: 'run-1', status: 'completed' as const, output: 'recovered result' };
+    expect((await store.reconcileCompletion(job.id, payload, 4000)).result).toBe('recovered result');
+    expect((await store.applyCompletion({ jobId: job.id, nonce: 'nonce_123456', payload, now: 5000 })).duplicate).toBe(true);
+  });
   it('writes new jobs under box_job:v1 and follows the normal lifecycle', async () => {
     const redis = new FakeRedis();
     const store = new BoxJobStore(redis);

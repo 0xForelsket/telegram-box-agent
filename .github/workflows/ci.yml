@@ -30,6 +30,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Verify durable execution in the Worker runtime
+        run: npm run verify:reliability
+
       - name: Exercise provider-free integration demo
         run: npm run demo
 

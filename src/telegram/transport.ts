@@ -1,10 +1,20 @@
 import { TelegramTypes } from '../../types/telegram';
-import { formatMarkdown, splitMessage, stripFormatting } from '../utils/helpers';
+import { formatMarkdown, splitMessage, stripFormatting, globalFetch } from '../utils/helpers';
+import { executionSignal } from '../runtime/execution';
 
 interface TelegramEnvelope<T> {
   ok: boolean;
   result: T;
   description?: string;
+  parameters?: { retry_after?: number };
+}
+
+export class TelegramRateLimitError extends Error {
+  readonly retryAfterMs: number;
+  constructor(seconds: number) {
+    super('Telegram delivery is rate limited (429).');
+    this.retryAfterMs = Math.max(1, Number.isFinite(seconds) ? seconds : 60) * 1000;
+  }
 }
 
 export class TelegramTransport {
@@ -122,7 +132,7 @@ export class TelegramTransport {
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const response = await fetch(`${this.apiUrl}${path}`, init);
+        const response = await globalFetch(`${this.apiUrl}${path}`, { ...init, signal: executionSignal(init.signal, 10_000) });
         let envelope: TelegramEnvelope<T>;
         try {
           envelope = await response.json() as TelegramEnvelope<T>;
@@ -134,8 +144,9 @@ export class TelegramTransport {
           };
         }
         if (response.ok && envelope.ok) return envelope;
+        if (response.status === 429) throw new TelegramRateLimitError(envelope.parameters?.retry_after ?? 60);
         const error = new Error(`Telegram API error (${response.status}): ${envelope.description || 'ok=false'}`);
-        if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
+        if (attempt === 0 && response.status >= 500) {
           lastError = error;
           continue;
         }
@@ -150,24 +161,7 @@ export class TelegramTransport {
   }
 
   private async requestOk(path: string, init: RequestInit): Promise<void> {
-    let lastError: Error | null = null;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const response = await fetch(`${this.apiUrl}${path}`, init);
-        if (response.ok) return;
-        const error = new Error(`Telegram API error (${response.status}).`);
-        if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
-          lastError = error;
-          continue;
-        }
-        throw error;
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        if (attempt === 0 && /network|fetch|timeout|abort/i.test(lastError.message)) continue;
-        throw lastError;
-      }
-    }
-    throw lastError || new Error('Telegram request failed.');
+    await this.requestJson(path, init);
   }
 
   private isMarkdownError(error: unknown): boolean {

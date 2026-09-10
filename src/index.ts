@@ -1,3 +1,5 @@
+import { BotRuntime } from "./runtime/bot_runtime";
+import { constantTimeEqual } from "./utils/helpers";
 import { Env } from './env';
 import TelegramBot from './api/telegram';
 import { dashboardHtml } from './dashboard/dashboard';
@@ -18,8 +20,16 @@ export default {
       }
 
       const bot = new TelegramBot(env, ctx);
+      if (url.pathname === '/internal/inbox') {
+        const secret = env.TELEGRAM_WEBHOOK_SECRET?.trim();
+        if (request.method !== 'POST' || !secret || !constantTimeEqual(request.headers.get('X-Inbox-Secret') ?? '', secret)) {
+          return new Response('Forbidden', { status: 403 });
+        }
+        return Response.json({ processed: await new BotRuntime(env, ctx).drain() });
+      }
+
       if (url.pathname === '/webhook') {
-        return await bot.handleWebhook(request);
+        return await new BotRuntime(env, ctx).webhook.accept(request);
       }
 
       if (url.pathname === '/box/callback') {
@@ -93,6 +103,7 @@ export default {
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const bot = new TelegramBot(env, ctx);
+    ctx.waitUntil(new BotRuntime(env, ctx).drain());
     ctx.waitUntil(bot.processScheduledTasks());
   },
 };

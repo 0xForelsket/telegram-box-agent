@@ -1,4 +1,5 @@
 import { Box, type WebhookPayload } from '@upstash/box';
+import { BoxRecovery, inspectBoxRun, type InspectBoxRun } from './box_recovery';
 import { getConfig, type Env } from '../../env';
 import { RedisClient } from '../../utils/redis';
 import { createBoxCallbackAuthorization, verifyBoxCallbackAuthorization } from './callback_auth';
@@ -57,6 +58,7 @@ export interface QueuedBoxJob {
 }
 
 export interface BoxJobServiceDependencies {
+  inspectRun?: InspectBoxRun;
   store?: BoxJobStore;
   launchJob?: LaunchJob;
   sendMessage?: SendMessage;
@@ -79,6 +81,7 @@ export class BoxJobService {
   private readonly artifacts: ArtifactGateway;
   private readonly sendDocument: SendDocument;
   private readonly resumeJob: ResumeJob;
+  private readonly recovery: BoxRecovery;
 
   constructor(
     private readonly env: Env,
@@ -97,6 +100,7 @@ export class BoxJobService {
     this.artifacts = dependencies.artifacts ?? new ArtifactGateway(env, redis, { jobs: this.store, now: this.now });
     this.sendDocument = dependencies.sendDocument ?? (async () => undefined);
     this.resumeJob = dependencies.resumeJob ?? resumeApprovedPiBoxJob;
+    this.recovery = new BoxRecovery(this.store, dependencies.inspectRun ?? inspectBoxRun(env), this.now);
   }
 
   async bindChat(chatId: number, sessionKey: string): Promise<void> {
@@ -119,9 +123,24 @@ export class BoxJobService {
     const chatId = await this.getBoundChatId();
     if (chatId === null) return 0;
     let recovered = 0;
-    for (const candidate of await this.store.listForChat(chatId, 50)) {
+    const candidates = (await this.store.listForChat(chatId, 50)).filter(job => {
+      if (!ACTIVE_STATUSES.has(job.status)) return !job.completionDeliveredAt || !job.cleanupCompletedAt;
+      if (job.status === 'awaiting_approval') return !job.approvalNoticeDeliveredAt || (job.pendingApproval?.expiresAt ?? Infinity) <= this.now();
+      return this.now() - job.updatedAt >= (job.status === 'running' ? 5 : 10) * 60_000;
+    });
+    // Rotate bounded work so two long-running jobs cannot starve an older
+    // failed delivery. Completed and cleaned jobs cost no per-record locks.
+    const offset = candidates.length ? Math.floor(this.now() / 60_000) % candidates.length : 0;
+    for (const candidate of [...candidates.slice(offset), ...candidates.slice(0, offset)].slice(0, 2)) {
       let job = candidate;
-      const expired = await this.store.expireApproval(job.id, this.now());
+      try {
+        job = await this.recovery.reconcile(job);
+      } catch (error) {
+        console.error('Box reconciliation failed', { jobId: job.id, error: String(error) });
+        continue;
+      }
+      const expired = job.status === 'awaiting_approval' && (job.pendingApproval?.expiresAt ?? Infinity) <= this.now()
+        ? await this.store.expireApproval(job.id, this.now()) : null;
       if (expired) job = expired;
       if (job.status === 'awaiting_approval' && !job.approvalNoticeDeliveredAt) {
         await this.deliverApproval(job.id).catch(error => console.error('Box approval delivery recovery failed:', error));
@@ -420,6 +439,7 @@ export class BoxJobService {
         now: this.now(),
       });
       const launched = await this.launchJob({
+        onCreated: boxId => this.store.recordProvisionedBox(job.id, boxId, this.now()),
         jobId: job.id,
         prompt: job.request,
         boxApiKey: this.config.upstashBoxApiKey!,

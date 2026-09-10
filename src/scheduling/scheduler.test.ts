@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { LuaRedis } from '../test/lua_redis';
 import { RedisClient } from '../utils/redis';
 import { parseDigestInput, parseReminderInput, ScheduledJob, SharedScheduler } from './scheduler';
 
@@ -53,146 +54,68 @@ describe('SharedScheduler', () => {
       .toBe('2026-08-12T08:30:00.000Z');
   });
 
-  it('claims a due job once and reschedules recurring work', async () => {
-    const job: ScheduledJob = { id: 'abc', type: 'reminder', chatId: 1, sessionKey: 'private:1', nextAt: 100, createdAt: 0, recurrence: 'daily', payload: { text: 'hello' } };
-    const zadd = vi.fn().mockResolvedValue(undefined);
-    const redis = {
-      zrangeByScore: vi.fn().mockResolvedValue([JSON.stringify(job)]),
-      zrem: vi.fn().mockResolvedValue(true),
-      zadd,
-    } as unknown as RedisClient;
+  function fixture(recurrence?: 'daily') {
+    const redis = new LuaRedis();
+    const scheduler = new SharedScheduler(redis as unknown as RedisClient);
+    const job: ScheduledJob = { id: 'a', type: 'reminder', chatId: 1, sessionKey: 'private:1', nextAt: redis.now, createdAt: 0, recurrence, payload: { text: 'hello' } };
+    return { redis, scheduler, job };
+  }
+
+  it('claims each occurrence once across concurrent drains', async () => {
+    const { redis, scheduler, job } = fixture('daily');
+    await scheduler.schedule(job);
     const handler = vi.fn().mockResolvedValue(undefined);
-
-    await expect(new SharedScheduler(redis).drainDue(handler, 200)).resolves.toBe(1);
+    await Promise.all([scheduler.drainDue(handler, redis.now), scheduler.drainDue(handler, redis.now)]);
     expect(handler).toHaveBeenCalledOnce();
-    expect(zadd).toHaveBeenCalledWith('schedule:v1:due', 100 + 24 * 60 * 60_000, expect.any(String));
+    expect((await scheduler.list(job.sessionKey))[0].nextAt).toBe(job.nextAt + 86400000);
   });
 
-  it('requeues a failed job with a bounded retry count', async () => {
-    const job: ScheduledJob = { id: 'abc', type: 'reminder', chatId: 1, sessionKey: 'private:1', nextAt: 100, createdAt: 0, payload: { text: 'hello' } };
-    const zadd = vi.fn().mockResolvedValue(undefined);
-    const redis = { zrangeByScore: vi.fn().mockResolvedValue([JSON.stringify(job)]), zrem: vi.fn().mockResolvedValue(true), zadd } as unknown as RedisClient;
-    await new SharedScheduler(redis).drainDue(vi.fn().mockRejectedValue(new Error('send failed')), 200);
-    expect(zadd).toHaveBeenCalledOnce();
-    expect(JSON.parse(zadd.mock.calls[0][2])).toMatchObject({ attempts: 1 });
-  });
-
-  // The retry rewrote `nextAt`, and the next occurrence was computed from it,
-  // so one transient failure moved a 09:00 daily reminder to 09:05 forever.
-  it('anchors a recurrence to its original slot across a retry', async () => {
-    const slot = 24 * 60 * 60_000;
-    const day = 24 * 60 * 60_000;
-    const job: ScheduledJob = {
-      id: 'abc', type: 'reminder', chatId: 1, sessionKey: 'private:1',
-      nextAt: slot, createdAt: 0, recurrence: 'daily', payload: { text: 'standup' },
-    };
-    const scheduled: ScheduledJob[] = [];
-    const redis = {
-      zrangeByScore: vi.fn().mockResolvedValue([JSON.stringify(job)]),
-      zrem: vi.fn().mockResolvedValue(true),
-      zadd: vi.fn(async (_key: string, _score: number, member: string) => {
-        scheduled.push(JSON.parse(member));
-      }),
-    } as unknown as RedisClient;
-
-    // First run fails and is retried five minutes later.
-    await new SharedScheduler(redis).drainDue(vi.fn().mockRejectedValue(new Error('telegram down')), slot);
-    const retry = scheduled[0];
-    expect(retry).toMatchObject({ attempts: 1, slotAt: slot });
-    expect(retry.nextAt).toBe(slot + 5 * 60_000);
-
-    // The retry succeeds; the next occurrence must be one day after the slot,
-    // not one day after the retry.
-    const afterRetry = { ...retry };
-    (redis.zrangeByScore as ReturnType<typeof vi.fn>).mockResolvedValue([JSON.stringify(afterRetry)]);
-    await new SharedScheduler(redis).drainDue(vi.fn().mockResolvedValue(undefined), afterRetry.nextAt);
-
-    expect(scheduled[1].nextAt).toBe(slot + day);
-    expect(scheduled[1].attempts).toBe(0);
-  });
-
-  // Four minutes of upstream trouble should not delete a standing reminder.
-  it('keeps a recurring job alive after its retries are exhausted', async () => {
-    const slot = 24 * 60 * 60_000;
-    const job: ScheduledJob = {
-      id: 'abc', type: 'reminder', chatId: 1, sessionKey: 'private:1',
-      nextAt: slot + 15 * 60_000, slotAt: slot, attempts: 3, createdAt: 0,
-      recurrence: 'daily', payload: { text: 'standup' },
-    };
-    const zadd = vi.fn().mockResolvedValue(undefined);
-    const redis = {
-      zrangeByScore: vi.fn().mockResolvedValue([JSON.stringify(job)]),
-      zrem: vi.fn().mockResolvedValue(true),
-      zadd,
-    } as unknown as RedisClient;
-
-    await new SharedScheduler(redis).drainDue(vi.fn().mockRejectedValue(new Error('still down')), job.nextAt);
-
-    expect(zadd).toHaveBeenCalledOnce();
-    expect(JSON.parse(zadd.mock.calls[0][2])).toMatchObject({
-      nextAt: slot + 24 * 60 * 60_000,
-      attempts: 0,
+  it('retains the original occurrence when the process loses its finish write', async () => {
+    const { redis, scheduler, job } = fixture();
+    await scheduler.schedule(job);
+    const evaluate = redis.eval.bind(redis);
+    let crash = true;
+    vi.spyOn(redis, 'eval').mockImplementation(async (script, keys, args) => {
+      if (crash && script.includes("'ZREM'")) throw new Error('process died');
+      return evaluate(script, keys, args);
     });
-  });
-
-  it('drops a one-off job once its retries are exhausted', async () => {
-    const job: ScheduledJob = {
-      id: 'abc', type: 'reminder', chatId: 1, sessionKey: 'private:1',
-      nextAt: 100, attempts: 3, createdAt: 0, payload: { text: 'once' },
-    };
-    const zadd = vi.fn().mockResolvedValue(undefined);
-    const redis = {
-      zrangeByScore: vi.fn().mockResolvedValue([JSON.stringify(job)]),
-      zrem: vi.fn().mockResolvedValue(true),
-      zadd,
-    } as unknown as RedisClient;
-
-    await new SharedScheduler(redis).drainDue(vi.fn().mockRejectedValue(new Error('gone')), 200);
-
-    expect(zadd).not.toHaveBeenCalled();
-  });
-
-  it('is idempotent when two Worker isolates see the same due member', async () => {
-    const member = JSON.stringify({ id: 'same', type: 'reminder', chatId: 1, sessionKey: '1', nextAt: 100, createdAt: 0, payload: { text: 'once' } } satisfies ScheduledJob);
-    let claimed = false;
-    const redis = {
-      zrangeByScore: vi.fn().mockResolvedValue([member]),
-      zrem: vi.fn().mockImplementation(async () => {
-        if (claimed) return false;
-        claimed = true;
-        return true;
-      }),
-      zadd: vi.fn(),
-    } as unknown as RedisClient;
     const handler = vi.fn().mockResolvedValue(undefined);
-
-    await Promise.all([
-      new SharedScheduler(redis).drainDue(handler, 200),
-      new SharedScheduler(redis).drainDue(handler, 200),
-    ]);
+    await expect(scheduler.drainDue(handler, redis.now)).rejects.toThrow('process died');
+    expect(await scheduler.list(job.sessionKey)).toHaveLength(1);
+    await scheduler.drainDue(handler, redis.now);
     expect(handler).toHaveBeenCalledOnce();
+    crash = false;
+    redis.now += 150001;
+    await scheduler.drainDue(handler, redis.now);
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(await scheduler.list(job.sessionKey)).toEqual([]);
   });
 
-  it('limits each cron drain to three due jobs', async () => {
-    const members = Array.from({ length: 5 }, (_, index) => JSON.stringify({
-      id: `job-${index}`,
-      type: 'reminder',
-      chatId: 1,
-      sessionKey: 'private:1',
-      nextAt: 100 + index,
-      createdAt: 0,
-      payload: { text: `Reminder ${index}` },
-    } satisfies ScheduledJob));
-    const zrangeByScore = vi.fn().mockImplementation(async (_key, _min, _max, limit) => members.slice(0, limit));
-    const redis = {
-      zrangeByScore,
-      zrem: vi.fn().mockResolvedValue(true),
-      zadd: vi.fn(),
-    } as unknown as RedisClient;
-    const handler = vi.fn().mockResolvedValue(undefined);
+  it('anchors recurring retries to the original slot and preserves recurring jobs after exhaustion', async () => {
+    const { redis, scheduler, job } = fixture('daily');
+    await scheduler.schedule(job);
+    const fail = vi.fn().mockRejectedValue(new Error('telegram down'));
+    for (let i = 0; i < 4; i++) {
+      await scheduler.drainDue(fail, redis.now);
+      const next = (await scheduler.list(job.sessionKey))[0];
+      if (i < 3) expect(next.slotAt).toBe(job.nextAt);
+      redis.now = next.nextAt;
+    }
+    expect(redis.now).toBe(job.nextAt + 86400000);
+    expect((await scheduler.list(job.sessionKey))[0].attempts).toBe(0);
+  });
 
-    await expect(new SharedScheduler(redis).drainDue(handler, 200)).resolves.toBe(3);
-    expect(zrangeByScore).toHaveBeenCalledWith('schedule:v1:due', 0, 200, 3);
-    expect(handler).toHaveBeenCalledTimes(3);
+  it('does not recreate a canceled recurring job when an in-flight delivery finishes', async () => {
+    const { redis, scheduler, job } = fixture('daily');
+    await scheduler.schedule(job);
+    await scheduler.drainDue(async () => { await scheduler.cancel(job.sessionKey, job.id); }, redis.now);
+    expect(await scheduler.list(job.sessionKey)).toEqual([]);
+  });
+
+  it('bounds each drain to three occurrences', async () => {
+    const { redis, scheduler, job } = fixture();
+    for (let i = 0; i < 5; i++) await scheduler.schedule({ ...job, id: String(i) });
+    expect(await scheduler.drainDue(async () => {}, redis.now)).toBe(3);
+    expect(await scheduler.list(job.sessionKey)).toHaveLength(2);
   });
 });

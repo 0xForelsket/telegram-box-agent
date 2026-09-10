@@ -3,10 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2024-09-29"
 compatibility_flags = ["nodejs_compat"]
 
-# Cron is intentionally limited to lightweight reminders, digests, and
-# delivery recovery. It never advances Box agent jobs.
+# Cron recovers the durable inbox, reminders, digests, and delivery state.
+# Box agents execute externally; cron only reconciles their recorded outcomes.
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["* * * * *"]
 
 [[r2_buckets]]
 binding = "ARTIFACT_BUCKET"
@@ -68,3 +68,7 @@ Operating rules:
 - In groups, act as a participant rather than impersonating the owner.
 """
 SYSTEM_INIT_MESSAGE_ROLE = "system"
+
+[[services]]
+binding = "INBOX_WORKER"
+service = "telegram-box-agent"

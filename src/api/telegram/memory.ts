@@ -906,13 +906,10 @@ export abstract class TelegramMemoryBot extends TelegramAuthorizationBot {
               recentTurns.length - TelegramBotBase.RECENT_TURNS_TO_KEEP,
             ),
           );
-          const turnsToKeep = recentTurns.slice(
-            -TelegramBotBase.RECENT_TURNS_TO_KEEP,
-          );
-          await this.setRecentTurns(sessionKey, turnsToKeep);
-        } else {
-          await this.setRecentTurns(sessionKey, recentTurns);
         }
+        // Keep the source until its summary is safely stored. An interrupted
+        // extraction must not discard the only copy of these turns.
+        await this.setRecentTurns(sessionKey, recentTurns);
 
         await this.redis.del(`context:${sessionKey}`);
       },
@@ -941,7 +938,12 @@ export abstract class TelegramMemoryBot extends TelegramAuthorizationBot {
       sessionKey,
     );
     if (updatedSummary) {
-      await this.setConversationSummary(sessionKey, updatedSummary);
+      await this.redis.withLock(recentTurnsKey(sessionKey), async () => {
+        const current = await this.getRecentTurns(sessionKey);
+        if (JSON.stringify(current.slice(0, turnsToSummarize.length)) !== JSON.stringify(turnsToSummarize)) return;
+        await this.setConversationSummary(sessionKey, updatedSummary);
+        await this.setRecentTurns(sessionKey, current.slice(turnsToSummarize.length));
+      }, { ttlSeconds: 30 });
     }
   }
 

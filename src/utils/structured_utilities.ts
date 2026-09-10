@@ -1,3 +1,4 @@
+import { globalFetch } from "./helpers";
 import { URLReader } from '../web/url_reader';
 
 const weatherLabels: Record<number, string> = {
@@ -119,7 +120,7 @@ export async function searchArxiv(query: string, limit = 5, signal?: AbortSignal
   if (!query.trim()) throw new Error('Provide an arXiv search query.');
   const url = new URL('https://export.arxiv.org/api/query');
   url.search = new URLSearchParams({ search_query: `all:${query.trim()}`, start: '0', max_results: String(Math.max(1, Math.min(10, limit))), sortBy: 'submittedDate', sortOrder: 'descending' }).toString();
-  const response = await fetch(url, { signal, headers: { 'User-Agent': 'Telegram-Box-Agent/0.1 (self-hosted bot)' } });
+  const response = await globalFetch(url, { signal, headers: { 'User-Agent': 'Telegram-Box-Agent/0.1 (self-hosted bot)' } });
   if (!response.ok) throw new Error(`arXiv returned HTTP ${response.status}.`);
   const xml = await response.text();
   const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)];
@@ -136,7 +137,7 @@ export async function searchArxiv(query: string, limit = 5, signal?: AbortSignal
 }
 
 async function fetchJson<T>(url: URL | string, signal?: AbortSignal, headers?: Record<string, string>): Promise<T> {
-  const response = await fetch(url, { signal, headers });
+  const response = await globalFetch(url, { signal, headers });
   if (!response.ok) throw new Error(`Upstream API returned HTTP ${response.status}.`);
   return await response.json() as T;
 }

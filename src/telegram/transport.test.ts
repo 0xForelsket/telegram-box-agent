@@ -32,6 +32,13 @@ describe('TelegramTransport retries', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it('preserves Telegram retry_after without immediately repeating a rate-limited send', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: false, parameters: { retry_after: 120 } }, { status: 429 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(new TelegramTransport('https://api.telegram.test').sendMessage(1, 'hello')).rejects.toMatchObject({ retryAfterMs: 120000 });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('sends an animated draft with a stable non-zero draft id', async () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: true, result: true }));
     vi.stubGlobal('fetch', fetchMock);

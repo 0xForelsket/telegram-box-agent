@@ -1,5 +1,6 @@
 import { readSSEJson } from '../search/sse';
 import { globalFetch } from '../utils/helpers';
+import { executionSignal } from '../runtime/execution';
 import { ChatCompletionResponse, ToolCall } from './chat_types';
 
 interface ChatStreamChunk {
@@ -35,6 +36,7 @@ export async function streamOpenAIChatCompletion(
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
     body: JSON.stringify({ ...requestBody, stream: true, stream_options: { include_usage: true } }),
+    signal: executionSignal(undefined, 60_000),
   });
   if (!response.ok) {
     throw new Error(`Streaming chat completion error (${response.status}): ${(await response.text()).slice(0, 300)}`);

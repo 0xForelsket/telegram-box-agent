@@ -1,4 +1,5 @@
 import type { Env } from '../env';
+import { executionSignal } from '../runtime/execution';
 
 /**
  * The global `fetch`, safe to store on an object.
@@ -8,7 +9,9 @@ import type { Env } from '../env';
  * once it is assigned to a field and later called as `this.fetchImpl(...)`.
  * The wrapper keeps the call site plain while restoring the global receiver.
  */
-export const globalFetch: typeof fetch = (input, init?) => fetch(input, init);
+export const globalFetch: typeof fetch = (input, init?) => fetch(input, {
+  ...init, signal: executionSignal(init?.signal ?? (input instanceof Request ? input.signal : undefined)),
+});
 
 /**
  * Matches a fenced block: a closed pair, or an unterminated fence running to
@@ -145,7 +148,7 @@ export function splitMessage(text: string, maxLength: number = 4096): string[] {
 export async function sendChatAction(chatId: number, action: string, env: Env): Promise<void> {
   const token = env.TELEGRAM_BOT_TOKEN;
   const url = `https://api.telegram.org/bot${token}/sendChatAction`;
-  await fetch(url, {
+  await globalFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

@@ -1,3 +1,5 @@
+import { globalFetch } from "../../utils/helpers";
+import { deferReply } from "../../runtime/execution";
 import { Env } from "../../env";
 import { TelegramTypes } from "../../../types/telegram";
 import {
@@ -561,6 +563,7 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
               (delta) => streamingReply?.append(delta) || Promise.resolve(),
             );
 
+            const replySaved = await deferReply(chatId, response);
             await this.rememberConversation(
               sessionKey,
               promptText,
@@ -572,6 +575,7 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
                 error,
               );
             });
+            if (replySaved) return;
             if (!(await streamingReply?.complete(response))) {
               await this.sendMessageWithFallback(chatId, response);
             }
@@ -692,7 +696,7 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
 
   protected answerCallbackQuery(callbackQueryId: string): void {
     this.runBackground("answerCallbackQuery", () =>
-      fetch(`${this.apiUrl}/answerCallbackQuery`, {
+      globalFetch(`${this.apiUrl}/answerCallbackQuery`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ callback_query_id: callbackQueryId }),
@@ -850,7 +854,7 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
     }
     try {
       const url = await this.getFileUrl(document.file_id);
-      const response = await fetch(url);
+      const response = await globalFetch(url);
       if (!response.ok)
         throw new Error(`Telegram file download failed (${response.status}).`);
       const bytes = new Uint8Array(await response.arrayBuffer());
@@ -911,7 +915,7 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
     const startedAt = Date.now();
     try {
       const fileUrl = await this.getFileUrl(voice.file_id);
-      const response = await fetch(fileUrl, {
+      const response = await globalFetch(fileUrl, {
         signal: AbortSignal.timeout(20_000),
       });
       if (!response.ok)
@@ -954,50 +958,6 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
           message,
         );
       else await this.sendMessageWithFallback(chatId, message);
-    }
-  }
-
-  protected getProcessedUpdateKey(updateId: number): string {
-    return `processed_update:${updateId}`;
-  }
-
-  protected async claimUpdate(
-    updateId: number,
-  ): Promise<"claimed" | "processing" | "completed"> {
-    try {
-      const claimed = await this.redis.setIfNotExists(
-        this.getProcessedUpdateKey(updateId),
-        "processing",
-        TelegramBotBase.PROCESSED_UPDATE_TTL_SECONDS,
-      );
-      if (claimed) return "claimed";
-
-      const state = await this.redis.get(this.getProcessedUpdateKey(updateId));
-      // "1" is the completed marker used by versions deployed before the
-      // processing/completed distinction was introduced.
-      return state === "completed" || state === "1"
-        ? "completed"
-        : "processing";
-    } catch (error) {
-      console.error(
-        "Redis update deduplication unavailable; processing update in degraded mode:",
-        error,
-      );
-      return "claimed";
-    }
-  }
-
-  protected async completeUpdate(updateId: number): Promise<void> {
-    try {
-      await this.redis.set(
-        this.getProcessedUpdateKey(updateId),
-        "completed",
-        TelegramBotBase.PROCESSED_UPDATE_TTL_SECONDS,
-      );
-    } catch (error) {
-      // The reply has already been delivered. Returning an error here would
-      // make Telegram repeat a successful update and could duplicate replies.
-      console.error("Failed to persist completed webhook update:", error);
     }
   }
 
@@ -1073,66 +1033,6 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
       hash = Math.imul(hash, 16777619);
     }
     return (hash >>> 0).toString(16).padStart(8, "0");
-  }
-
-  async handleWebhook(request: Request): Promise<Response> {
-    if (request.method !== "POST") {
-      return new Response("Method Not Allowed", { status: 405 });
-    }
-
-    // Fail closed. Without a configured secret this endpoint accepted forged
-    // updates from anyone who knew the URL.
-    const webhookSecret = this.env.TELEGRAM_WEBHOOK_SECRET?.trim();
-    if (!webhookSecret) {
-      console.error(
-        "TELEGRAM_WEBHOOK_SECRET is not configured; refusing all webhook traffic. " +
-          "Set it as a Wrangler secret and register the same value as Telegram's webhook secret token.",
-      );
-      return new Response("Forbidden", { status: 403 });
-    }
-    const headerSecret =
-      request.headers.get("X-Telegram-Bot-Api-Secret-Token") ?? "";
-    if (!constantTimeEqual(headerSecret, webhookSecret)) {
-      return new Response("Forbidden", { status: 403 });
-    }
-
-    let claimedUpdateId: number | undefined;
-    try {
-      const update: TelegramTypes.Update = await request.json();
-      const claim = await this.claimUpdate(update.update_id);
-      if (claim === "completed") {
-        return new Response("OK", { status: 200 });
-      }
-      if (claim === "processing") {
-        return new Response("Update Still Processing", {
-          status: 503,
-          headers: { "Retry-After": "2" },
-        });
-      }
-      claimedUpdateId = update.update_id;
-
-      // Do not acknowledge Telegram until the user-visible work has finished.
-      // Work scheduled with waitUntil after returning HTTP 200 only receives a
-      // limited post-response grace period. A slow model/tool call could be
-      // terminated after Telegram had stopped retrying, leaving the user with
-      // no reply while the update remained marked as processed.
-      await this.handleUpdate(update);
-      await this.completeUpdate(update.update_id);
-
-      return new Response("OK", { status: 200 });
-    } catch (error) {
-      console.error("Error processing webhook:", error);
-      if (claimedUpdateId !== undefined) {
-        // Permit Telegram to retry a failed attempt. The claim is only durable
-        // after handleUpdate, including any user-facing error reply, succeeds.
-        await this.redis
-          .del(this.getProcessedUpdateKey(claimedUpdateId))
-          .catch((cleanupError) => {
-            console.error("Failed to release webhook update claim:", cleanupError);
-          });
-      }
-      return new Response("Internal Server Error", { status: 500 });
-    }
   }
 
   async sendPhoto(
@@ -1286,7 +1186,7 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
       const fingerprint = this.getMenuScopeFingerprint(plan);
       if (storedFingerprints[index] === fingerprint) continue;
       try {
-        const response = await fetch(`${this.apiUrl}/setMyCommands`, {
+        const response = await globalFetch(`${this.apiUrl}/setMyCommands`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1336,7 +1236,7 @@ export abstract class TelegramMessageHandlingBot extends TelegramBoxOrchestratio
     const baseUrl = this.config.miniAppBaseUrl;
     if (!baseUrl) return true;
     try {
-      const response = await fetch(`${this.apiUrl}/setChatMenuButton`, {
+      const response = await globalFetch(`${this.apiUrl}/setChatMenuButton`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

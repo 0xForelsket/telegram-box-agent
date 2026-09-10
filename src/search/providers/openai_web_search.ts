@@ -1,3 +1,4 @@
+import { globalFetch } from "../../utils/helpers";
 import { Env, getConfig } from '../../env';
 import { ParsedSearchQuery, SearchProvider, SearchProviderError, SearchResponse, SearchSource } from '../types';
 
@@ -40,7 +41,7 @@ export class OpenAIWebSearchProvider implements SearchProvider {
       throw new SearchProviderError('OPENAI_SEARCH_API_KEY is not configured', this.id, false, 'auth');
     }
 
-    const response = await fetch('https://api.openai.com/v1/responses', {
+    const response = await globalFetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

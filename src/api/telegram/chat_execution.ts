@@ -1,4 +1,5 @@
 import OpenAIAPI from "../openai_api";
+import { trackBackground } from "../../runtime/execution";
 import {
   ChatCompletionResponse,
   Message,
@@ -87,7 +88,7 @@ export abstract class TelegramChatExecutionBot extends TelegramMemoryBot {
     const promise = fn().catch((error) => {
       console.error(`Background task failed (${label}):`, error);
     });
-    if (this.ctx) {
+    if (!trackBackground(promise) && this.ctx) {
       this.ctx.waitUntil(promise);
     }
   }

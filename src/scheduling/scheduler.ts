@@ -1,11 +1,26 @@
 import { RedisClient } from '../utils/redis';
 import { localParts, zonedTimeToUtc } from '../utils/timezone';
+import { runExecution } from '../runtime/execution';
 
 const QUEUE_KEY = 'schedule:v1:due';
 // Each job can use several Redis and upstream subrequests. Keep a cron batch
 // deliberately small so even the most expensive digest stays inside the
-// Cloudflare Free request budget; the five-minute trigger drains any backlog.
+// Cloudflare Free request budget; the one-minute trigger drains any backlog.
 const MAX_DUE_PER_RUN = 3;
+
+export const CLAIM_SCHEDULE = `
+local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if not score or tonumber(score) > tonumber(ARGV[2]) then return 0 end
+redis.call('SET', KEYS[2], ARGV[3], 'PX', ARGV[4])
+redis.call('ZADD', KEYS[1], tonumber(ARGV[2]) + tonumber(ARGV[4]), ARGV[1])
+return 1`;
+
+export const FINISH_SCHEDULE = `
+if redis.call('GET', KEYS[2]) ~= ARGV[2] then return 0 end
+redis.call('DEL', KEYS[2])
+if redis.call('ZREM', KEYS[1], ARGV[1]) == 0 then return 0 end
+if ARGV[3] ~= '' then redis.call('ZADD', KEYS[1], ARGV[4], ARGV[3]) end
+return 1`;
 
 export type ScheduledJobType = 'reminder' | 'digest';
 
@@ -65,41 +80,47 @@ export class SharedScheduler {
     const members = await this.redis.zrangeByScore(QUEUE_KEY, 0, now, MAX_DUE_PER_RUN);
     let processed = 0;
     for (const member of members) {
-      if (!(await this.redis.zrem(QUEUE_KEY, member))) continue;
       const job = parseJob(member);
-      if (!job) continue;
+      if (!job) { await this.redis.zrem(QUEUE_KEY, member); continue; }
+      const lease = crypto.randomUUID();
+      const keys = [QUEUE_KEY, `schedule:v1:lease:${job.id}`];
+      if (!await this.redis.eval<number>(CLAIM_SCHEDULE, keys, [member, now, lease, 150_000])) continue;
+      let next: ScheduledJob | null = null;
       try {
-        await handler(job);
+        await runExecution(90_000, () => handler(job));
         processed += 1;
-        await this.scheduleNextOccurrence(job, now);
+        next = this.nextOccurrence(job, now);
       } catch (error) {
         console.error(`Scheduled job ${job.id} failed:`, error);
         const attempts = (job.attempts || 0) + 1;
         if (attempts <= MAX_ATTEMPTS) {
-          await this.schedule({
+          next = {
             ...job,
             attempts,
             // Anchor the recurrence to the slot this run belongs to, so the
             // retry time never becomes the new recurrence base.
             slotAt: job.slotAt ?? job.nextAt,
             nextAt: now + attempts * 5 * 60_000,
-          });
-          continue;
+          };
+        } else {
+          console.error(`Scheduled job ${job.id} exhausted retries; skipping this occurrence.`);
+          next = this.nextOccurrence(job, now);
         }
         // The occurrence is abandoned, but a recurring job survives it. Losing
         // a standing reminder to a few minutes of upstream trouble is a far
         // worse failure than skipping one delivery.
-        console.error(`Scheduled job ${job.id} exhausted ${MAX_ATTEMPTS} attempts; skipping this occurrence.`);
-        await this.scheduleNextOccurrence(job, now);
       }
+      // The old occurrence survives termination until this atomic transition.
+      await this.redis.eval<number>(FINISH_SCHEDULE, keys,
+        [member, lease, next ? JSON.stringify(next) : '', next?.nextAt ?? 0]);
     }
     return processed;
   }
 
-  private async scheduleNextOccurrence(job: ScheduledJob, now: number): Promise<void> {
+  private nextOccurrence(job: ScheduledJob, now: number): ScheduledJob | null {
     const nextAt = this.getNextOccurrence(job, now);
-    if (nextAt === null) return;
-    await this.schedule({ ...job, nextAt, attempts: 0, slotAt: undefined });
+    if (nextAt === null) return null;
+    return { ...job, nextAt, attempts: 0, slotAt: undefined };
   }
 
   private getNextOccurrence(job: ScheduledJob, now: number): number | null {

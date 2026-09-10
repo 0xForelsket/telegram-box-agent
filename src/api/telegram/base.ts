@@ -76,7 +76,6 @@ export abstract class TelegramBotBase implements TelegramCommandBot {
   protected static readonly MAX_AMBIENT_MESSAGES = 10;
   protected static readonly MAX_AMBIENT_CHARS = 2500;
   protected static readonly MAX_SUBJECT_HINT_CHARS = 500;
-  protected static readonly PROCESSED_UPDATE_TTL_SECONDS = 10 * 60;
   protected static readonly LAST_SOURCES_TTL_SECONDS = 24 * 60 * 60;
   protected static readonly ACTIVE_TASK_TTL_SECONDS = 15 * 60;
   protected static readonly COMMAND_SCHEMA_KEY =
@@ -365,13 +364,6 @@ export abstract class TelegramBotBase implements TelegramCommandBot {
     sessionKey: string,
     chatId: number,
   ): Promise<Message>;
-
-  protected abstract getProcessedUpdateKey(updateId: number): string;
-
-  protected abstract claimUpdate(
-    updateId: number,
-  ): Promise<"claimed" | "processing" | "completed">;
-  protected abstract completeUpdate(updateId: number): Promise<void>;
 
   protected abstract getSummaryModel(currentModel: string): string;
 
@@ -782,8 +774,6 @@ export abstract class TelegramBotBase implements TelegramCommandBot {
   protected abstract getFeedSubscriptions(
     sessionKey: string,
   ): Promise<FeedSubscription[]>;
-
-  abstract handleWebhook(request: Request): Promise<Response>;
 
   abstract sendPhoto(
     chatId: number,

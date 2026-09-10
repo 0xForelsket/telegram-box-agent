@@ -31,7 +31,7 @@ describe('globalFetch', () => {
       const holder = { doFetch: globalFetch };
       await holder.doFetch('https://example.test', { method: 'POST' });
 
-      expect(spy).toHaveBeenCalledWith('https://example.test', { method: 'POST' });
+      expect(spy).toHaveBeenCalledWith('https://example.test', { method: 'POST', signal: expect.any(AbortSignal) });
     } finally {
       globalThis.fetch = original;
     }
